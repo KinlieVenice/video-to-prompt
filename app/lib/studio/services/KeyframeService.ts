@@ -10,11 +10,18 @@ import {
   signature,
   writeAsset,
 } from "../server/store";
-import { extractSourceFrame } from "../server/ffmpeg";
+import { extractSourceFrame, run } from "../server/ffmpeg";
 import { routerRequest, routerBaseUrl } from "../server/openai";
 import { probeImage } from "../server/ffmpeg";
 import { MotionAnalysisService } from "./MotionAnalysisService";
 import { continuousPredecessor, referenceLinkCurrent } from "../references";
+import {
+  backgroundInstructions,
+  expressionInstructions,
+  sceneCompletionInstructions,
+  visualDirection,
+} from "../visualDirection";
+import { actorAppearanceInstructions, appearanceNotes } from "../appearance";
 
 export interface ImageGenerationProvider {
   replace(input: {
@@ -117,6 +124,10 @@ export class KeyframeService {
           references: c.references,
         })),
       mappings: version.mappings,
+      appearanceNotes: appearanceNotes(version),
+      visualDirection: visualDirection(version),
+      aspect: version.aspect,
+      promptVersion: 4,
       model,
       route,
       boundary: inherited
@@ -141,6 +152,32 @@ export class KeyframeService {
     );
     await saveRecord("cache", { id, asset: frame.asset });
     return frame.asset;
+  }
+  static async generationCanvas(source: string, aspect: Version["aspect"]) {
+    const image = await probeImage(assetPath(source));
+    const [width, height] = aspect === "9:16" ? [720, 1280] : [1280, 720];
+    if (Math.abs(image.width / image.height - width / height) < 0.005)
+      return source;
+    const id = `scene-canvas-${signature({ source, aspect, version: 1 })}`;
+    const cached = await cacheGet<{ asset: string }>(id);
+    if (cached && (await assetExists(cached.asset))) return cached.asset;
+    const canvas = await newAsset("png");
+    // Fit rather than crop the evidence. Padding provides an explicit canvas
+    // for image generation to complete; original reference files stay intact.
+    await run("ffmpeg", [
+      "-y",
+      "-i",
+      assetPath(source),
+      "-vf",
+      `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black`,
+      "-frames:v",
+      "1",
+      "-update",
+      "1",
+      canvas.path,
+    ]);
+    await saveRecord("cache", { id, asset: canvas.asset });
+    return canvas.asset;
   }
   static async extract(analysis: Analysis, segment: Segment): Promise<Frames> {
     const beats = (
@@ -211,6 +248,11 @@ export class KeyframeService {
   ): Promise<Frames> {
     if (!model.trim())
       throw new Error("Select an image model exposed by 9router.");
+    const direction = visualDirection(version);
+    if (direction.backgroundMode === "NEW" && !direction.backgroundPrompt)
+      throw new Error(
+        "Describe the new background before generating reference frames.",
+      );
     const cast = analysis.speakers.flatMap((s) => {
       const character = characters.find((c) => c.id === version.mappings[s.id]);
       return character ? [{ speaker: s, character }] : [];
@@ -274,24 +316,44 @@ export class KeyframeService {
           description: `Identity reference for ${character.name}, replacing ${speaker.name} (${speaker.description}).`,
         })),
       )
-      .slice(0, 12);
+      .slice(
+        0,
+        direction.backgroundMode === "NEW" || direction.completeScene ? 11 : 12,
+      );
     const shot = analysis.shots.find((s) => s.id === segment.shotId)!;
-    const prompt = `Replace only the mapped actors in this source frame. Preserve source composition, body pose, gestures, camera angle, clothing where relevant, background and lighting. ${cast.map(({ speaker, character }) => `${speaker.name} (${speaker.description}) becomes ${character.name}: ${character.description}; style ${character.visualStyle}.`).join(" ")} Shot: ${shot.description}. ${shot.camera}. ${shot.lighting}. Return the replacement frame as an image, no text or collage.`;
+    const prompt = `Recast the mapped actors in this source frame using their chosen character identities. Preserve the source body pose, choreography and prop interactions at this timestamp. Output aspect ratio: ${version.aspect}. ${cast.map(({ speaker, character }) => `${speaker.name} (${speaker.description}) becomes ${character.name}: ${character.description}; style ${character.visualStyle}. ${actorAppearanceInstructions(version, speaker.id, speaker.name, character.name)}`).join(" ")} Source scene and performance context: ${shot.description}. Source camera: ${shot.camera}. Source lighting context: ${shot.lighting}. ${backgroundInstructions(version)} ${sceneCompletionInstructions(version)} ${expressionInstructions(version)} Return the replacement frame as an image, no text or collage.`;
     // Sequential calls keep rate and cost easy to understand; each endpoint is independently cached.
     const outputs: string[] = [];
-    for (const source of [frames.first, frames.last]) {
-      if (source === frames.first && outputs.length === 0 && inherited) {
+    for (const [index, source] of [frames.first, frames.last].entries()) {
+      if (index === 0 && inherited) {
         outputs.push(inherited.asset);
         continue;
       }
-      const endpointKey = `image-${signature({ key, source })}`;
+      const environmentAnchor =
+        (direction.backgroundMode === "NEW" || direction.completeScene) &&
+        index === 1
+          ? outputs[0]
+          : undefined;
+      const generationSource = direction.completeScene
+        ? await KeyframeService.generationCanvas(source, version.aspect)
+        : source;
+      const endpointKey = `image-${signature({ key, source: generationSource, environmentAnchor })}`;
       const endpoint = await cacheGet<{ asset: string }>(endpointKey);
       const asset =
         endpoint && (await assetExists(endpoint.asset))
           ? endpoint.asset
           : await this.provider.replace({
-              source,
-              references,
+              source: generationSource,
+              references: environmentAnchor
+                ? [
+                    ...references,
+                    {
+                      asset: environmentAnchor,
+                      description:
+                        "Generated environment anchor from this segment's first frame. Match its background design, completed object geometry, layout, palette and lighting. Use image 1 for the current actor pose and action state; use the character identity references for the cast. Do not copy the anchor's earlier pose or restart its action.",
+                    },
+                  ]
+                : references,
               prompt,
               model,
               connection,

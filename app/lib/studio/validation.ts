@@ -106,7 +106,29 @@ export const characterSchema = z.object({
 export const versionEditSchema = z.object({
   name: z.string().trim().min(1).max(200),
   sourceRange: z.object(range).optional(),
+  visualDirection: z
+    .object({
+      backgroundMode: z.enum(["SOURCE", "NEW"]),
+      backgroundPrompt: z.string().trim().max(4000),
+      expression: z.enum(["MATCH_SOURCE", "SUBTLE", "EXPRESSIVE"]),
+      completeScene: z.boolean().optional(),
+    })
+    .refine(
+      (value) =>
+        value.backgroundMode !== "NEW" || value.backgroundPrompt.length > 0,
+      {
+        message: "Describe the new background before saving or generating.",
+        path: ["backgroundPrompt"],
+      },
+    )
+    .optional(),
   mappings: z.record(id, id),
+  appearanceNotes: z
+    .record(id, z.string().trim().max(2000))
+    .refine((value) => Object.keys(value).length <= 200, {
+      message: "Maximum 200 actor appearance notes per version.",
+    })
+    .optional(),
   audioMode: z.enum(["ORIGINAL", "CHARACTER_TTS", "UPLOADED", "SILENT"]),
   audioOffset: z.number().min(-600).max(600),
   target: z.enum(["VEO_LITE", "OMNI_FLASH"]),

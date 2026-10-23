@@ -21,6 +21,10 @@ Voice design is not offered by this branch's router adapter. Previously saved Ge
 
 ## Manual Google Flow
 
+Background and expression controls add no analysis or speech requests. Reference generation still uses up to two image requests per segment (one with a valid inherited first frame). For a new background, the last-frame request includes the generated first frame as an additional environment reference; image-input usage follows the selected provider route. Changing a look requires new reference images and manually generated Flow clips, with new image usage/Flow credits. Previously generated files remain on disk.
+
+Scene completion uses the same image requests and source analysis, with no extra AI call. Preparing an aspect-ratio canvas uses local FFmpeg and is cached. Its generated first-frame environment reference adds image input to the existing last-frame request, under the selected image route's usage rules.
+
 Baseline estimates use one 720p generation per segment:
 
 | Target                         | Duration               | Estimated credits                                 |
@@ -32,6 +36,8 @@ Baseline estimates use one 720p generation per segment:
 Retries, multiple outputs and upscaling add cost. Ultra lower-priority modes and 360p pricing are not inferred. Use the per-generation override when your account shows a different quote. Check [official Flow credit rates](https://support.google.com/flow/answer/16526234?hl=en) and confirm the quote in Flow before generating.
 
 ## Integration references
+
+Per-actor appearance notes add no analysis or voice requests. Saving changed notes requires regenerated visual references and Flow clips for that version, using the image/Flow usage described above. Cosmetic changes do not trigger TTS regeneration or alter a saved voice.
 
 Official OpenAI schemas and 9router source were checked separately. Router-specific image reference fields and speech model routing must not be mistaken for official OpenAI API schemas.
 

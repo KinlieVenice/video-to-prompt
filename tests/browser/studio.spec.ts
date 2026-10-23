@@ -2,6 +2,8 @@ import { test, expect } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { defaultVoice, newVersion } from "../../app/lib/studio/types";
 import { run } from "../../app/lib/studio/server/ffmpeg";
 
 test("environment router settings appear without exposing the server key", async ({
@@ -196,9 +198,15 @@ test("local studio: upload, corrections, reusable cast, Flow import and playable
     .locator("option")
     .filter({ hasText: "Browser test performer" })
     .getAttribute("value");
+  await expect(
+    page.getByLabel("Appearance notes for Actor 1", { exact: true }),
+  ).toBeDisabled();
   await page.getByLabel("Replace Actor 1 with").selectOption(characterId!);
   await page
-    .getByRole("button", { name: "Save version settings", exact: true })
+    .getByLabel("Appearance notes for Actor 1", { exact: true })
+    .fill("Wear glasses and have diamonds on the teeth.");
+  await page
+    .getByRole("button", { name: "Save cast & appearance", exact: true })
     .click();
   await page
     .getByRole("button", { name: /Flow workspace Generate shot by shot/ })
@@ -212,10 +220,26 @@ test("local studio: upload, corrections, reusable cast, Flow import and playable
     .nth(0)
     .getByRole("button", { name: "Extract original frames", exact: true })
     .click();
-  await expect(segments.nth(0).locator(".frame-pair img")).toHaveCount(2);
+  await expect(segments.nth(0).locator(".source-frame-pair img")).toHaveCount(
+    2,
+  );
+  await expect(
+    segments.nth(0).locator(".replacement-frame-pair img"),
+  ).toHaveCount(0);
+  await expect(
+    segments.nth(0).locator(".replacement-frame-pair"),
+  ).toContainText("NOT GENERATED");
+  await expect(
+    page.getByText("0/2 segments have generated replacement frame pairs.", {
+      exact: false,
+    }),
+  ).toBeVisible();
   await expect(
     segments.nth(0).getByLabel("Flow prompt for segment 1"),
   ).toHaveValue(/Browser test performer/);
+  await expect(
+    segments.nth(0).getByLabel("Flow prompt for segment 1"),
+  ).toHaveValue(/Wear glasses and have diamonds on the teeth/);
   for (let i = 0; i < 2; i++) {
     await segments.nth(i).locator(".clip-import input").setInputFiles(fixture);
     await expect(
@@ -255,6 +279,245 @@ test("local studio: upload, corrections, reusable cast, Flow import and playable
     ),
   ).toBe(true);
   expect(errors).toEqual([]);
+  // A new look reuses the plan and source evidence, while requiring new clips.
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await page
+    .getByRole("button", { name: /Flow workspace Generate shot by shot/ })
+    .click();
+  await expect(page.getByLabel("Character expressiveness")).toHaveValue(
+    "SUBTLE",
+  );
+  await expect(
+    page.getByLabel("Complete cropped or padded areas"),
+  ).toBeChecked();
+  await page.getByLabel("Complete cropped or padded areas").uncheck();
+  await page
+    .getByRole("combobox", { name: "Background", exact: true })
+    .selectOption("NEW");
+  await expect(
+    page.getByRole("button", { name: "Save scene & expression", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByLabel("New background description")
+    .fill("A pastel dance studio with warm daylight");
+  await page.getByLabel("Character expressiveness").selectOption("EXPRESSIVE");
+  await page
+    .getByRole("button", { name: "Save scene & expression", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Version saved", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".segment-card")).toHaveCount(2);
+  await expect(
+    page
+      .locator(".clip-import")
+      .getByText("Generated clip ready", { exact: true }),
+  ).toHaveCount(0);
+  await expect(segments.nth(0).locator(".source-frame-pair img")).toHaveCount(
+    2,
+  );
+  await expect(
+    segments.nth(0).locator(".replacement-frame-pair img"),
+  ).toHaveCount(0);
+  await expect(
+    segments.nth(0).getByLabel("Flow prompt for segment 1"),
+  ).toHaveValue(/A pastel dance studio with warm daylight/);
+  await expect(
+    segments.nth(0).getByLabel("Flow prompt for segment 1"),
+  ).toHaveValue(/EXPRESSION — MORE EXPRESSIVE/);
+  await expect(
+    segments.nth(0).getByLabel("Flow prompt for segment 1"),
+  ).toHaveValue(/Browser test performer/);
+  await page.reload();
+  await page
+    .getByRole("button", { name: /Flow workspace Generate shot by shot/ })
+    .click();
+  await expect(
+    page.getByRole("combobox", { name: "Background", exact: true }),
+  ).toHaveValue("NEW");
+  await expect(page.getByLabel("New background description")).toHaveValue(
+    "A pastel dance studio with warm daylight",
+  );
+  await expect(page.getByLabel("Character expressiveness")).toHaveValue(
+    "EXPRESSIVE",
+  );
+  await expect(
+    page.getByLabel("Complete cropped or padded areas"),
+  ).not.toBeChecked();
+  await expect(page.getByLabel("Flow prompt for segment 1")).toHaveValue(
+    /Wear glasses and have diamonds on the teeth/,
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("Flow separates original source images from generated replacement images for every segment", async ({
+  page,
+}) => {
+  const asset = () => `${randomUUID()}.png`;
+  const originalFirst = asset(),
+    originalBoundary = asset(),
+    originalLast = asset();
+  const generatedFirst = asset(),
+    generatedLast = asset();
+  const version = newVersion("display-version");
+  version.planRevision = 1;
+  version.mappings.actor = "replacement";
+  version.segments = [
+    {
+      id: "first",
+      shotId: "shot",
+      start: 0,
+      end: 4,
+      duration: 4,
+      overlap: 0,
+      strategy: "FIRST_LAST",
+      credits: 10,
+      warnings: [],
+    },
+    {
+      id: "second",
+      shotId: "shot",
+      start: 4,
+      end: 8,
+      duration: 4,
+      overlap: 0,
+      strategy: "FIRST_LAST",
+      credits: 10,
+      warnings: [],
+    },
+  ];
+  version.frames.first = { first: originalFirst, last: originalBoundary };
+  version.frames.second = {
+    first: originalBoundary,
+    last: originalLast,
+    generated: {
+      first: generatedFirst,
+      last: generatedLast,
+      signature: "generated",
+    },
+  };
+  await page.route("**/api/studio", (route) =>
+    route.fulfill({
+      json: {
+        ffmpegReady: true,
+        projects: [
+          {
+            id: "display-project",
+            name: "Frame display",
+            analysisId: "display-analysis",
+            versions: [version],
+            updatedAt: "now",
+          },
+        ],
+        analyses: [
+          {
+            id: "display-analysis",
+            sourceAsset: `${randomUUID()}.mp4`,
+            sourceName: "reference.mp4",
+            sourceHash: "source",
+            media: {
+              duration: 8,
+              width: 320,
+              height: 180,
+              fps: 30,
+              hasAudio: false,
+            },
+            shots: [
+              {
+                id: "shot",
+                start: 0,
+                end: 8,
+                description: "Original performer",
+                camera: "Static",
+                lighting: "Even",
+                motion: "",
+              },
+            ],
+            speakers: [
+              { id: "actor", name: "Original actor", description: "At center" },
+            ],
+            turns: [],
+            activity: [],
+            status: "ANALYZED",
+            revision: 1,
+            createdAt: "now",
+            warnings: [],
+          },
+        ],
+        characters: [
+          {
+            id: "replacement",
+            name: "Saved replacement",
+            description: "User's chosen character",
+            visualStyle: "Illustrated",
+            references: [],
+            voice: defaultVoice(),
+            updatedAt: "now",
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/assets/**", (route) =>
+    route.request().url().endsWith(".png")
+      ? route.fulfill({
+          contentType: "image/png",
+          body: Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
+            "base64",
+          ),
+        })
+      : route.fulfill({ status: 404 }),
+  );
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: /Flow workspace Generate shot by shot/ })
+    .click();
+  const segments = page.locator(".segment-card");
+  await expect(
+    page.getByText("1/2 segments have generated replacement frame pairs.", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(
+    segments.nth(0).locator(".replacement-frame-pair img"),
+  ).toHaveCount(0);
+  await expect(
+    segments.nth(0).locator(".replacement-frame-pair"),
+  ).toContainText("NOT GENERATED");
+  await expect(segments.nth(0).locator(".source-frame-pair img")).toHaveCount(
+    2,
+  );
+  await expect(
+    segments.nth(1).locator(".replacement-frame-pair img"),
+  ).toHaveCount(2);
+  await expect(
+    segments.nth(1).locator(".replacement-frame-pair img").first(),
+  ).toHaveAttribute("src", `/api/assets/${generatedFirst}`);
+  await expect(
+    segments.nth(1).locator(".source-frame-pair img").first(),
+  ).toHaveAttribute("src", `/api/assets/${originalBoundary}`);
+  await expect(
+    page.getByRole("link", {
+      name: "Download generated replacement first frame for segment 2",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await segments
+    .nth(1)
+    .getByText("Source frame references · original cast", { exact: true })
+    .click();
+  await expect(
+    page.getByRole("link", {
+      name: "Download original source first frame for segment 2",
+      exact: true,
+    }),
+  ).toBeVisible();
 });
 
 test("source ranges persist, shot splits can be undone or removed, and export uses the chosen duration", async ({

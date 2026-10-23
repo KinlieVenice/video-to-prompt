@@ -27,6 +27,8 @@ import {
 import type { StudioState, Version } from "../../lib/studio/types";
 import { assetUrl, seconds } from "../../lib/studio/types";
 import { reenactmentRange } from "../../lib/studio/range";
+import { visualDirectionChanged } from "../../lib/studio/visualDirection";
+import { appearanceChanged } from "../../lib/studio/appearance";
 import { studioRequest, type StudioResponse } from "../../lib/studio/client";
 import { SourcePanel } from "./SourcePanel";
 import { CharacterPanel } from "./CharacterPanel";
@@ -145,6 +147,18 @@ export function Studio() {
       exportSignature: undefined,
       ...(planChange ? { planRevision: undefined } : {}),
     };
+    const visualsChanged =
+      visualDirectionChanged(version, changed) ||
+      appearanceChanged(version, changed);
+    if (visualsChanged) changed.clips = {};
+    if (visualsChanged || version.aspect !== changed.aspect) {
+      changed.frames = Object.fromEntries(
+        Object.entries(version.frames).map(([id, frames]) => [
+          id,
+          { ...frames, generated: undefined },
+        ]),
+      );
+    }
     setData((current) => ({
       ...current,
       projects: current.projects.map((p) =>

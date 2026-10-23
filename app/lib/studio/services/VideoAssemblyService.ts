@@ -13,6 +13,8 @@ import { probe, run } from "../server/ffmpeg";
 import { VoiceService } from "./VoiceService";
 import { segmentMotion, segmentOpeningState } from "../motion";
 import { reenactmentRange } from "../range";
+import { visualDirection } from "../visualDirection";
+import { appearanceNotes } from "../appearance";
 
 export function srtTime(seconds: number) {
   const ms = Math.max(0, Math.round(seconds * 1000));
@@ -340,6 +342,7 @@ export class VideoAssemblyService {
       version: version.name,
       source: { name: analysis.sourceName, duration: analysis.media.duration },
       sourceRange: reenactmentRange(analysis, version),
+      visualDirection: visualDirection(version),
       audioMode: version.audioMode,
       target: version.target,
       segments: version.segments.map((segment) => ({
@@ -365,6 +368,7 @@ export class VideoAssemblyService {
         Object.values(version.mappings).includes(c.id),
       ),
       mappings: version.mappings,
+      appearanceNotes: appearanceNotes(version),
       estimatedFlowCredits: version.segments.reduce((n, s) => n + s.credits, 0),
       note: "Download frame and character image files beside this manifest. Google Flow generation is manual. No video-to-video editing.",
     };

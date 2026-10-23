@@ -2,6 +2,13 @@ import type { Analysis, Character, Segment, Version } from "../types";
 import { STRATEGIES } from "../types";
 import { segmentMotionText, segmentOpeningState } from "../motion";
 import { shotPredecessor } from "../references";
+import { actorAppearanceInstructions } from "../appearance";
+import {
+  backgroundInstructions,
+  expressionInstructions,
+  sceneCompletionInstructions,
+  visualDirection,
+} from "../visualDirection";
 
 export class PromptGenerationService {
   static generate(
@@ -16,10 +23,11 @@ export class PromptGenerationService {
     );
     const openingState = segmentOpeningState(shot, segment.start);
     const previous = shotPredecessor(version, segment);
+    const direction = visualDirection(version);
     const cast = analysis.speakers.map((s) => {
       const character = characters.find((c) => c.id === version.mappings[s.id]);
       return character
-        ? `${s.name} (${s.description}) becomes ${character.name}: ${character.description}. Visual style: ${character.visualStyle}. Keep source clothing where relevant; use the attached character reference images for identity.`
+        ? `${s.name} (${s.description}) becomes ${character.name}: ${character.description}. Visual style: ${character.visualStyle}. Keep source clothing where relevant, except for explicitly requested appearance changes; use the attached character reference images for identity. ${actorAppearanceInstructions(version, s.id, s.name, character.name)}`
         : `${s.name}: ${s.description}. No replacement assigned.`;
     });
     const dialogue = turns.map((t) => {
@@ -30,16 +38,21 @@ export class PromptGenerationService {
     });
     return [
       `Create ${segment.duration} seconds, ${version.aspect}. Target: ${version.target === "VEO_LITE" ? "Google Flow Veo 3.1 Lite" : "Google Flow Gemini Omni Flash (720p)"}. Strategy: ${STRATEGIES[segment.strategy]}.`,
-      `Reenact source interval ${segment.start.toFixed(3)}–${segment.end.toFixed(3)}s as one continuous camera shot. Preserve composition, relevant clothing, background, lighting, blocking and camera angle.`,
+      `Reenact source interval ${segment.start.toFixed(3)}–${segment.end.toFixed(3)}s as one continuous camera shot. Preserve composition, relevant clothing, blocking, choreography, action props, source rhythm and camera angle.`,
       ...cast,
-      `Scene: ${shot.description}`,
-      `Camera: ${shot.camera}. Lighting: ${shot.lighting}.`,
+      direction.backgroundMode === "NEW"
+        ? `Source performance context (use for action and prop context; replace its environment): ${shot.description}`
+        : `Scene: ${shot.description}`,
+      `Camera: ${shot.camera}. ${direction.backgroundMode === "SOURCE" ? `Lighting: ${shot.lighting}.` : "Use lighting consistent with the selected new environment."}`,
+      backgroundInstructions(version),
+      sceneCompletionInstructions(version),
+      expressionInstructions(version),
       `Motion plan (seconds from THIS segment's start; execute in order):\n${segmentMotionText(shot, segment)}`,
       "Activity ranges describe sustained movement, not action onset. Separate onset brackets are estimates supported by snapshots. Preserve cause before reaction; do not invent missing transitions or speed up the main action to fill padding.",
       openingState
         ? `Incoming state observed near source ${openingState.time.toFixed(3)}s (context only, do not replay earlier action): ${openingState.text}`
         : "",
-      "Any intermediate source-pose images show timing/composition only; use the replacement character references for identity.",
+      `Any intermediate source-pose images show timing/composition only; use the replacement character references for identity.${direction.backgroundMode === "NEW" ? " Do not restore the original background from source evidence; maintain the new environment shown in the generated reference frames. Incoming state descriptions preserve performer and action-prop state, with environment controlled by the new-background direction above." : ""}`,
       segment.continuationOf
         ? `Continue only the previous generated segment ${segment.continuationOf} in this same shot.`
         : previous

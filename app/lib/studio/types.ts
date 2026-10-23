@@ -137,11 +137,19 @@ export type Frames = {
   };
 };
 export type ImportedClip = { asset: string; media: MediaInfo; trim: number };
+export type VisualDirection = {
+  backgroundMode: "SOURCE" | "NEW";
+  backgroundPrompt: string;
+  expression: "MATCH_SOURCE" | "SUBTLE" | "EXPRESSIVE";
+  completeScene?: boolean;
+};
 export type Version = {
   id: string;
   name: string;
   sourceRange?: Interval;
+  visualDirection?: VisualDirection;
   mappings: Record<string, string>;
+  appearanceNotes?: Record<string, string>;
   audioMode: AudioMode;
   uploadedAudio?: string;
   backgroundAudio?: string;
@@ -220,7 +228,14 @@ export function newVersion(id: string, name = "Version 1"): Version {
   return {
     id,
     name,
+    visualDirection: {
+      backgroundMode: "SOURCE",
+      backgroundPrompt: "",
+      expression: "SUBTLE",
+      completeScene: true,
+    },
     mappings: {},
+    appearanceNotes: {},
     audioMode: "ORIGINAL",
     audioOffset: 0,
     audioTakes: {},

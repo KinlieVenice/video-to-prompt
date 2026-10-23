@@ -93,9 +93,13 @@ export function CharacterPanel({
                     value={version.mappings[s.id] || ""}
                     onChange={(e) => {
                       const mappings = { ...version.mappings };
+                      const appearanceNotes = { ...version.appearanceNotes };
                       if (e.target.value) mappings[s.id] = e.target.value;
-                      else delete mappings[s.id];
-                      updateVersion({ mappings });
+                      else {
+                        delete mappings[s.id];
+                        delete appearanceNotes[s.id];
+                      }
+                      updateVersion({ mappings, appearanceNotes });
                     }}
                   >
                     <option value="">Keep original / unassigned</option>
@@ -105,6 +109,30 @@ export function CharacterPanel({
                       </option>
                     ))}
                   </select>
+                  <label className="mapping-appearance">
+                    Optional appearance for this assignment
+                    <textarea
+                      aria-label={`Appearance notes for ${s.name}`}
+                      rows={2}
+                      maxLength={2000}
+                      disabled={busy || !version.mappings[s.id]}
+                      value={version.appearanceNotes?.[s.id] || ""}
+                      placeholder="For example: wear glasses and have diamonds on the teeth."
+                      onChange={(e) =>
+                        updateVersion({
+                          appearanceNotes: {
+                            ...version.appearanceNotes,
+                            [s.id]: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                    <span className="hint">
+                      {version.mappings[s.id]
+                        ? "Applies to this actor in this version. The saved character profile and voice stay the same."
+                        : "Assign a replacement character to add appearance details."}
+                    </span>
+                  </label>
                 </div>
               ))
             ) : (
@@ -112,6 +140,21 @@ export function CharacterPanel({
                 Add original actors in Source & analysis to map them to
                 characters.
               </p>
+            )}
+            {analysis.speakers.length > 0 && (
+              <div className="inline wrap">
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => run("save_version")}
+                >
+                  Save cast & appearance
+                </button>
+                <span className="hint">
+                  Changed appearance requires new reference frames and Flow
+                  clips. Duplicate the version first to keep another look.
+                </span>
+              </div>
             )}
           </div>
         )}

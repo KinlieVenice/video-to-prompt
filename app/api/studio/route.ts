@@ -10,6 +10,11 @@ import {
 } from "../../lib/studio/types";
 import { connectionSchema } from "../../lib/studio/connection";
 import { reenactmentRange } from "../../lib/studio/range";
+import { visualDirectionChanged } from "../../lib/studio/visualDirection";
+import {
+  appearanceChanged,
+  appearanceNotes,
+} from "../../lib/studio/appearance";
 import {
   resolveRouterConnection,
   publicRouterSettings,
@@ -356,6 +361,18 @@ export async function POST(request: Request) {
                 "Character mapping refers to a missing actor or character.",
               );
           }
+          const notes = appearanceNotes({ ...ctx.version, ...edited });
+          for (const actorId of Object.keys(notes)) {
+            if (
+              !ctx.analysis.speakers.some(
+                (speaker) => speaker.id === actorId,
+              ) ||
+              !edited.mappings[actorId]
+            )
+              throw new Error(
+                "Assign a saved replacement character before adding appearance notes for this actor.",
+              );
+          }
           const planChanged = [
             "target",
             "maxDuration",
@@ -371,10 +388,19 @@ export async function POST(request: Request) {
           const castChanged =
             JSON.stringify(edited.mappings) !==
             JSON.stringify(ctx.version.mappings);
-          Object.assign(ctx.version, edited);
+          const updatedSettings = {
+            ...ctx.version,
+            ...edited,
+            appearanceNotes: notes,
+          };
+          const visualsChanged =
+            visualDirectionChanged(ctx.version, updatedSettings) ||
+            appearanceChanged(ctx.version, updatedSettings);
+          const aspectChanged = ctx.version.aspect !== edited.aspect;
+          Object.assign(ctx.version, edited, { appearanceNotes: notes });
           if (planChanged || rangeChanged) ctx.version.planRevision = undefined;
-          if (castChanged) {
-            ctx.version.clips = {};
+          if (castChanged || visualsChanged) ctx.version.clips = {};
+          if (castChanged || visualsChanged || aspectChanged) {
             Object.values(ctx.version.frames).forEach((f) => {
               f.generated = undefined;
             });

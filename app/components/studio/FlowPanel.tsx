@@ -12,6 +12,7 @@ import {
 import type {
   Analysis,
   Character,
+  Frames,
   Segment,
   Version,
 } from "../../lib/studio/types";
@@ -26,6 +27,9 @@ import { PromptGenerationService } from "../../lib/studio/services/PromptGenerat
 import type { StudioAction } from "./Studio";
 import { segmentMotionText } from "../../lib/studio/motion";
 import { reenactmentRange } from "../../lib/studio/range";
+import { visualDirection } from "../../lib/studio/visualDirection";
+import { appearanceNotes } from "../../lib/studio/appearance";
+import { VisualDirectionControls } from "./VisualDirectionControls";
 import {
   continuousPredecessor,
   referenceLinkCurrent,
@@ -60,6 +64,56 @@ function ScenePreview({
     />
   );
 }
+
+function FramePair({
+  frames,
+  segmentNumber,
+  source = false,
+}: {
+  frames?: Pick<Frames, "first" | "last">;
+  segmentNumber: number;
+  source?: boolean;
+}) {
+  return (
+    <div
+      className={`frame-pair ${source ? "source-frame-pair" : "replacement-frame-pair"}`}
+      role="group"
+      aria-label={`${source ? "Original source" : "Generated replacement"} frames for segment ${segmentNumber}`}
+    >
+      {(["first", "last"] as const).map((which) => {
+        const asset = frames?.[which];
+        const kind = source ? "Original source" : "Generated replacement";
+        return (
+          <div className="frame-slot" key={which}>
+            {asset ? (
+              <a
+                href={assetUrl(asset)}
+                download
+                aria-label={`Download ${kind.toLowerCase()} ${which} frame for segment ${segmentNumber}`}
+              >
+                <img
+                  src={assetUrl(asset)}
+                  alt={`${kind} ${which} frame for segment ${segmentNumber}`}
+                />
+              </a>
+            ) : (
+              <ImagePlus size={23} />
+            )}
+            <span>
+              {which.toUpperCase()} FRAME ·{" "}
+              {source
+                ? "ORIGINAL SOURCE"
+                : asset
+                  ? "GENERATED"
+                  : "NOT GENERATED"}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function FlowPanel({
   analysis,
   version,
@@ -80,7 +134,16 @@ export function FlowPanel({
   const [copyError, setCopyError] = useState("");
   const stale = version.planRevision !== analysis.revision;
   const total = version.segments.reduce((n, s) => n + s.credits, 0);
+  const generatedPairs = version.segments.filter(
+    (segment) =>
+      version.frames[segment.id]?.generated?.first &&
+      version.frames[segment.id]?.generated?.last,
+  ).length;
   const range = reenactmentRange(analysis, version);
+  const direction = visualDirection(version);
+  const actorNotes = appearanceNotes(version);
+  const needsBackground =
+    direction.backgroundMode === "NEW" && !direction.backgroundPrompt;
   const copy = async (id: string, prompt: string) => {
     try {
       await navigator.clipboard.writeText(prompt);
@@ -115,6 +178,12 @@ export function FlowPanel({
           Prepare image references and a motion prompt, generate each clip in
           Google Flow, then upload the result here.
         </p>
+        <VisualDirectionControls
+          version={version}
+          updateVersion={updateVersion}
+          run={run}
+          busy={busy}
+        />
         <div className="three-cols">
           <label>
             Manual generation target
@@ -242,7 +311,7 @@ export function FlowPanel({
         <div className="inline wrap">
           <button
             className="button primary"
-            disabled={busy}
+            disabled={busy || needsBackground}
             onClick={() => run("plan")}
           >
             <Scissors size={15} />
@@ -250,7 +319,9 @@ export function FlowPanel({
           </button>
           <button
             className="button"
-            disabled={busy || !version.segments.length || stale}
+            disabled={
+              busy || needsBackground || !version.segments.length || stale
+            }
             onClick={() => run("package")}
           >
             <Download size={15} />
@@ -298,6 +369,13 @@ export function FlowPanel({
         </p>
       )}
       {copyError && <p className="notice">{copyError}</p>}
+      {version.segments.length > 0 && (
+        <p className="hint" role="status">
+          {generatedPairs}/{version.segments.length} segments have generated
+          replacement frame pairs. Source previews and source pose references
+          retain the original cast.
+        </p>
+      )}
       {!version.segments.length && (
         <section className="panel empty-workspace">
           <Film size={38} />
@@ -347,7 +425,9 @@ export function FlowPanel({
               <div className="stack">
                 <div className="scene-preview">
                   <ScenePreview analysis={analysis} segment={segment} />
-                  <span>ORIGINAL SHOT · {version.audioMode}</span>
+                  <span>
+                    SOURCE VIDEO · ORIGINAL CAST · {version.audioMode}
+                  </span>
                 </div>
                 <p className="muted">
                   {shot?.description ||
@@ -363,6 +443,17 @@ export function FlowPanel({
                   ))}
                 </div>
                 <div className="dialogue-excerpt">
+                  {analysis.speakers
+                    .filter(
+                      (actor) =>
+                        version.mappings[actor.id] && actorNotes[actor.id],
+                    )
+                    .map((actor) => (
+                      <p className="hint" key={`appearance-${actor.id}`}>
+                        <strong>{actor.name} appearance:</strong>{" "}
+                        {actorNotes[actor.id]}
+                      </p>
+                    ))}
                   {turns.length ? (
                     turns.map((t) => (
                       <p key={t.id}>
@@ -398,7 +489,7 @@ export function FlowPanel({
               </div>
               <div className="stack">
                 <div className="panel-heading">
-                  <span className="eyebrow">FRAME REFERENCES</span>
+                  <span className="eyebrow">REPLACEMENT FRAME REFERENCES</span>
                   <button
                     className="button small-button"
                     disabled={busy || stale}
@@ -410,32 +501,12 @@ export function FlowPanel({
                     Extract original frames
                   </button>
                 </div>
-                <div className="frame-pair">
-                  {["first", "last"].map((which) => {
-                    const asset =
-                      which === "first"
-                        ? frames?.generated?.first || frames?.first
-                        : frames?.generated?.last || frames?.last;
-                    return (
-                      <div className="frame-slot" key={which}>
-                        {asset ? (
-                          <a href={assetUrl(asset)} download>
-                            <img
-                              src={assetUrl(asset)}
-                              alt={`${which} frame for segment ${i + 1}`}
-                            />
-                          </a>
-                        ) : (
-                          <ImagePlus size={23} />
-                        )}
-                        <span>
-                          {which.toUpperCase()} FRAME
-                          {frames?.generated ? " · REPLACED" : " · ORIGINAL"}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+                <FramePair frames={frames?.generated} segmentNumber={i + 1} />
+                <p className={frames?.generated ? "hint" : "notice"}>
+                  {frames?.generated
+                    ? `Generated frames for ${cast.map((character) => character.name).join(", ") || "the mapped cast"}. Review the character identity before using them in Flow.`
+                    : "Replacement frames have not been generated for this segment. Extract original frames saves source images; click Generate replaced frames to create your chosen cast."}
+                </p>
                 {continuousPredecessor(version, segment) && (
                   <p className="hint">
                     Continuous shot: generate the preceding segment's references
@@ -456,7 +527,7 @@ export function FlowPanel({
                 )}
                 <button
                   className="button fit"
-                  disabled={busy || stale}
+                  disabled={busy || stale || needsBackground}
                   onClick={() =>
                     run("generate_frames", { segmentId: segment.id, model })
                   }
@@ -464,10 +535,21 @@ export function FlowPanel({
                   <Sparkles size={14} />
                   Generate replaced frames · up to 2 image charges
                 </button>
+                {frames && (
+                  <details>
+                    <summary>Source frame references · original cast</summary>
+                    <FramePair frames={frames} segmentNumber={i + 1} source />
+                    <p className="hint">
+                      These images were extracted from the uploaded video and
+                      retain its original actors. Download generated replacement
+                      images from the slots above for your chosen cast.
+                    </p>
+                  </details>
+                )}
                 {!!frames?.moments?.length && (
                   <div className="stack">
                     <span className="eyebrow">
-                      KEY ACTION POSES · SOURCE REFERENCES
+                      KEY ACTION POSES · ORIGINAL SOURCE CAST
                     </span>
                     <div className="character-references">
                       {frames.moments.map((moment) => (
@@ -524,6 +606,7 @@ export function FlowPanel({
                     <span className="eyebrow">FLOW PROMPT</span>
                     <button
                       className="button small-button"
+                      disabled={busy || needsBackground}
                       onClick={() => copy(segment.id, prompt)}
                     >
                       <Copy size={13} />
