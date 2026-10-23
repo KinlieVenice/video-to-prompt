@@ -8,6 +8,7 @@
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
     "format:check": "prettier --check app/lib/studio app/components/studio app/api tests docs README.md playwright.config.ts"
   },

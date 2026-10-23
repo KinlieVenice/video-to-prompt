@@ -1,16 +1,32 @@
 "use client";
-import { useState } from "react";
-import { Check, Plus, Scissors, Sparkles, Trash2 } from "lucide-react";
-import type { Analysis, Shot, Speaker, Turn } from "../../lib/studio/types";
+import { useRef, useState } from "react";
+import { Check, Plus, Scissors, Sparkles, Trash2, Undo2 } from "lucide-react";
+import type {
+  Analysis,
+  Shot,
+  Speaker,
+  Turn,
+  Version,
+} from "../../lib/studio/types";
 import { assetUrl, seconds } from "../../lib/studio/types";
 import type { StudioAction } from "./Studio";
+import { MotionTimelineEditor } from "./MotionTimelineEditor";
+import {
+  formatMotion,
+  mergeShotMotion,
+  trimShotMotion,
+} from "../../lib/studio/motion";
+import { SourceRangeEditor } from "./SourceRangeEditor";
+import { reenactmentRange } from "../../lib/studio/range";
 
 export function SourcePanel({
   analysis,
+  version,
   run,
   busy,
 }: {
   analysis: Analysis;
+  version: Version;
   run: StudioAction;
   busy: boolean;
 }) {
@@ -19,7 +35,25 @@ export function SourcePanel({
   const [turns, setTurns] = useState<Turn[]>(analysis.turns);
   const [split, setSplit] = useState(1);
   const [dirty, setDirty] = useState(false);
+  const [splitHistory, setSplitHistory] = useState<Shot[][]>([]);
+  const range = reenactmentRange(analysis, version);
+  const preview = useRef<HTMLVideoElement>(null);
+  const reviewEnd = useRef<number | undefined>(undefined);
+  const windows = shots.reduce(
+    (n, s) => n + Math.ceil((s.end - s.start) / 8),
+    0,
+  );
+  const review = (start: number, end: number) => {
+    const video = preview.current;
+    if (!video) return;
+    video.currentTime = Math.max(0, start - 0.4);
+    video.playbackRate = 0.5;
+    reviewEnd.current = Math.min(analysis.media.duration, end + 0.4);
+    video.scrollIntoView({ behavior: "smooth", block: "center" });
+    void video.play().catch(() => undefined);
+  };
   const changeShot = (id: string, patch: Partial<Shot>) => {
+    setSplitHistory([]);
     setShots((items) =>
       items.map((s) => (s.id === id ? { ...s, ...patch } : s)),
     );
@@ -34,16 +68,25 @@ export function SourcePanel({
   const cut = () => {
     const shot = shots.find((s) => s.start < split && s.end > split);
     if (!shot) return;
+    setSplitHistory((history) => [...history, structuredClone(shots)]);
     setShots((items) =>
       items.flatMap((s) =>
         s.id === shot.id
           ? [
-              { ...s, end: split },
-              { ...s, id: crypto.randomUUID(), start: split },
+              trimShotMotion(s, s.start, split),
+              { ...trimShotMotion(s, split, s.end), id: crypto.randomUUID() },
             ]
           : [s],
       ),
     );
+    setDirty(true);
+  };
+  const removeCut = (index: number) => {
+    const updated = [...shots];
+    updated[index - 1] = mergeShotMotion(updated[index - 1], updated[index]);
+    updated.splice(index, 1);
+    setShots(updated);
+    setSplitHistory([]);
     setDirty(true);
   };
   return (
@@ -55,10 +98,23 @@ export function SourcePanel({
             <span className="badge">
               {analysis.status === "LOCAL"
                 ? "Local scan complete"
-                : "Gemini analyzed"}
+                : analysis.provider === "OPENAI_9ROUTER"
+                  ? "OpenAI analyzed"
+                  : "Saved analysis"}
             </span>
           </div>
           <video
+            aria-label="Full source video preview"
+            ref={preview}
+            onTimeUpdate={(e) => {
+              if (
+                reviewEnd.current !== undefined &&
+                e.currentTarget.currentTime >= reviewEnd.current
+              ) {
+                e.currentTarget.pause();
+                reviewEnd.current = undefined;
+              }
+            }}
             key={analysis.sourceAsset}
             src={assetUrl(analysis.sourceAsset)}
             controls
@@ -68,17 +124,25 @@ export function SourcePanel({
           <div className="preview-caption">
             <span>{analysis.sourceName}</span>
             <span>
-              {seconds(analysis.media.duration)} · {analysis.media.width} ×{" "}
-              {analysis.media.height}
+              Full source {seconds(analysis.media.duration)} ·{" "}
+              {analysis.media.width} × {analysis.media.height}
             </span>
           </div>
+          {version.sourceRange && (
+            <p className="hint">
+              This player contains the full source. Preview range plays{" "}
+              {seconds(range.start)}–{seconds(range.end)}; the final video is{" "}
+              {seconds(range.end - range.start)}.
+            </p>
+          )}
         </section>
         <section className="panel stack">
           <span className="eyebrow">01 / UNDERSTAND THE PERFORMANCE</span>
           <h2>Start with what happened.</h2>
           <p className="muted">
-            Cuts and audio activity are measured locally. Gemini adds the visual
-            performance and a separate speaker transcript.
+            Cuts and audio activity are measured locally. OpenAI analyzes
+            timestamped frames through 9router. Transcription uses your selected
+            audio workflow.
           </p>
           <div className="stat-grid">
             <div>
@@ -102,21 +166,60 @@ export function SourcePanel({
             <Sparkles size={16} />
             {analysis.status === "ANALYZED"
               ? "Analysis saved for reuse"
-              : "Analyze with Gemini"}
+              : "Analyze with OpenAI"}
           </button>
+          {analysis.status === "ANALYZED" && (
+            <button
+              className="button"
+              disabled={busy || dirty}
+              onClick={() => run("refine_motion")}
+            >
+              <Sparkles size={16} />
+              Refine motion timing
+            </button>
+          )}
           <span className="hint">
-            Two API calls: visual analysis + audio transcription. Changing your
-            cast never repeats analysis.
+            Detailed motion: 0.5s samples, with 0.25s refinement near rapid/key
+            actions. {windows} analysis windows · {windows}–{windows * 2} model
+            requests before cache reuse. Refinement preserves the transcript and
+            actor labels. Saved reviewed beats stay intact; update segment plans
+            after refining.
           </span>
+          {version.sourceRange && (
+            <p className="hint">
+              Analysis covers the full {seconds(analysis.media.duration)} source
+              for reuse. This version plans and exports only{" "}
+              {seconds(range.start)}–{seconds(range.end)} (
+              {seconds(range.end - range.start)}).
+            </p>
+          )}
         </section>
       </div>
+      <SourceRangeEditor
+        key={`${version.id}-${range.start}-${range.end}`}
+        analysis={analysis}
+        version={version}
+        run={run}
+        busy={busy}
+        onPreview={(start, end) => {
+          if (!preview.current) return;
+          preview.current.currentTime = start;
+          preview.current.playbackRate = 1;
+          reviewEnd.current = end;
+          preview.current.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+          void preview.current.play().catch(() => undefined);
+        }}
+      />
       <section className="panel">
         <div className="panel-heading">
           <div>
             <span className="eyebrow">CAMERA TIMELINE</span>
             <h3>Every cut gets its own reference.</h3>
           </div>
-          <div className="inline">
+          <div className="inline wrap">
             <label className="compact-label">
               Split at{" "}
               <input
@@ -128,9 +231,27 @@ export function SourcePanel({
                 onChange={(e) => setSplit(Number(e.target.value))}
               />
             </label>
-            <button className="button" onClick={cut} disabled={busy}>
+            <button
+              className="button"
+              onClick={cut}
+              disabled={
+                busy || !shots.some((s) => s.start < split && s.end > split)
+              }
+            >
               <Scissors size={14} />
               Split shot
+            </button>
+            <button
+              className="button"
+              disabled={busy || !splitHistory.length}
+              onClick={() => {
+                setShots(splitHistory.at(-1)!);
+                setSplitHistory((history) => history.slice(0, -1));
+                setDirty(true);
+              }}
+            >
+              <Undo2 size={14} />
+              Undo split
             </button>
           </div>
         </div>
@@ -146,6 +267,28 @@ export function SourcePanel({
             </a>
           ))}
         </div>
+        <p className="hint">
+          Showing the full source camera timeline (
+          {seconds(analysis.media.duration)}). Current output:{" "}
+          {seconds(range.start)}–{seconds(range.end)} (
+          {seconds(range.end - range.start)}). Camera cuts divide shots; use
+          Reenactment range above to choose the output interval.
+        </p>
+        {shots.length > 1 && (
+          <div className="inline wrap">
+            {shots.slice(1).map((s, i) => (
+              <button
+                key={s.id}
+                className="button small-button"
+                disabled={busy}
+                onClick={() => removeCut(i + 1)}
+              >
+                <Trash2 size={14} />
+                Remove cut at {seconds(s.start)}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="timeline-legend">
           <span>
             <i className="dot" />
@@ -172,13 +315,7 @@ export function SourcePanel({
                         className="icon-button"
                         aria-label={`Remove cut before shot ${i + 1}`}
                         title="Remove this cut and merge with previous shot"
-                        onClick={() => {
-                          const updated = [...shots];
-                          updated[i - 1] = { ...updated[i - 1], end: s.end };
-                          updated.splice(i, 1);
-                          setShots(updated);
-                          setDirty(true);
-                        }}
+                        onClick={() => removeCut(i)}
                       >
                         <Trash2 size={15} />
                       </button>
@@ -194,12 +331,13 @@ export function SourcePanel({
                       value={s.end}
                       onChange={(e) => {
                         const end = Number(e.target.value);
+                        setSplitHistory([]);
                         setShots((items) =>
                           items.map((v, n) =>
                             n === i
-                              ? { ...v, end }
+                              ? trimShotMotion(v, v.start, end)
                               : n === i + 1
-                                ? { ...v, start: end }
+                                ? trimShotMotion(v, end, v.end)
                                 : v,
                           ),
                         );
@@ -241,13 +379,22 @@ export function SourcePanel({
                 <label>
                   Timestamped motion and gestures
                   <textarea
-                    value={s.motion}
+                    value={
+                      s.motionBeats ? formatMotion(s.motionBeats) : s.motion
+                    }
+                    readOnly={s.motionBeats !== undefined}
                     rows={2}
                     onChange={(e) =>
                       changeShot(s.id, { motion: e.target.value })
                     }
                   />
                 </label>
+                <MotionTimelineEditor
+                  shot={s}
+                  busy={busy}
+                  onChange={(patch) => changeShot(s.id, patch)}
+                  onReview={review}
+                />
               </div>
             ))}
           </div>

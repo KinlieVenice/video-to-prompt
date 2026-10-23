@@ -17,16 +17,16 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { ApiKeyDialog } from "../ApiKeyDialog";
+import { RouterSettingsDialog } from "./RouterSettingsDialog";
 import {
-  DEFAULT_MODEL,
-  loadApiKey,
-  loadModel,
-  saveApiKey,
-  saveModel,
-} from "../../lib/storage";
+  defaultConnection,
+  loadConnection,
+  saveConnection,
+  type PublicRouterSettings,
+} from "../../lib/studio/connection";
 import type { StudioState, Version } from "../../lib/studio/types";
 import { assetUrl, seconds } from "../../lib/studio/types";
+import { reenactmentRange } from "../../lib/studio/range";
 import { studioRequest, type StudioResponse } from "../../lib/studio/client";
 import { SourcePanel } from "./SourcePanel";
 import { CharacterPanel } from "./CharacterPanel";
@@ -82,8 +82,8 @@ export function Studio() {
   const [versionId, setVersionId] = useState("");
   const [tab, setTab] = useState<Tab>("source");
   const [settings, setSettings] = useState(false);
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState(DEFAULT_MODEL);
+  const [connection, setConnection] = useState(defaultConnection);
+  const [routerSettings, setRouterSettings] = useState<PublicRouterSettings>();
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -96,6 +96,8 @@ export function Studio() {
   const analysis = data.analyses.find((a) => a.id === project?.analysisId);
   const version =
     project?.versions.find((v) => v.id === versionId) || project?.versions[0];
+  const selectedRange =
+    analysis && version ? reenactmentRange(analysis, version) : undefined;
   const load = useCallback(async () => {
     try {
       const response = await fetch("/api/studio", { cache: "no-store" });
@@ -103,6 +105,8 @@ export function Studio() {
       if (!response.ok)
         throw new Error(json.error || "Could not open local projects.");
       setData(json);
+      setRouterSettings(json.routerSettings);
+      setConnection(loadConnection(json.routerSettings));
       setFfmpegReady(json.ffmpegReady ?? false);
       setProjectId((current) => {
         const candidate = current || localStorage.getItem("studio:project");
@@ -117,8 +121,6 @@ export function Studio() {
     }
   }, []);
   useEffect(() => {
-    setApiKey(loadApiKey());
-    setModel(loadModel());
     void load();
   }, [load]);
   useEffect(() => {
@@ -165,7 +167,9 @@ export function Studio() {
     setDownload(undefined);
     const labels: Record<string, string> = {
       create_project: "Scanning cuts and audio locally…",
-      analyze: "Analyzing visual performance and transcribing speakers…",
+      analyze: "Transcribing locally and analyzing timestamped frames…",
+      refine_motion:
+        "Refining motion timing and key poses; preserving your transcript…",
       generate_line: "Generating this speaker turn…",
       generate_frames: "Preparing character-replaced reference frames…",
       assemble: "Validating, trimming and assembling with FFmpeg…",
@@ -178,14 +182,14 @@ export function Studio() {
         versionId: version?.id,
         ...([
           "analyze",
+          "refine_motion",
           "generate_line",
           "generate_frames",
           "preview_voice",
           "design_voice",
         ].includes(action)
-          ? { apiKey }
+          ? { connection }
           : {}),
-        model,
         ...payload,
       };
       if (
@@ -202,7 +206,9 @@ export function Studio() {
         });
       const json = await studioRequest(
         action,
-        action === "save_version" ? { ...context, value: version } : context,
+        action === "save_version"
+          ? { ...context, value: payload.value ?? version }
+          : context,
         file,
       );
       setData(json);
@@ -315,11 +321,12 @@ export function Studio() {
             LOCAL-FIRST WORKSPACE
           </div>
           <p>
-            Your files and projects stay on this machine. Gemini calls use your
-            own key.
+            Projects and media are saved locally. OpenAI analysis uses your
+            configured 9router connection.
           </p>
           <button
             className="sidebar-settings"
+            disabled={!loaded || !!busy}
             onClick={() => setSettings(true)}
           >
             <Settings size={16} />
@@ -345,13 +352,16 @@ export function Studio() {
             <strong>{project?.name || "New workspace"}</strong>
           </div>
           <div className="inline">
-            <span className={`key-status ${apiKey ? "connected" : ""}`}>
+            <span
+              className={`key-status ${connection.model ? "connected" : ""}`}
+            >
               <i />
-              {apiKey ? "Gemini key saved" : "Bring your Gemini key"}
+              {connection.model ? "OpenAI via 9router" : "Set up 9router"}
             </span>
             <button
               className="icon-button"
               aria-label="Open settings"
+              disabled={!loaded || !!busy}
               onClick={() => setSettings(true)}
             >
               <Settings size={17} />
@@ -446,7 +456,12 @@ export function Studio() {
                     <div className="project-ribbon">
                       <span className="badge">{analysis.sourceName}</span>
                       <span>
-                        {seconds(analysis.media.duration)} /{" "}
+                        {seconds(selectedRange!.end - selectedRange!.start)}{" "}
+                        output · source {seconds(selectedRange!.start)}–
+                        {seconds(selectedRange!.end)}
+                      </span>
+                      <span>
+                        Full source {seconds(analysis.media.duration)} ·{" "}
                         {analysis.shots.length} shots
                       </span>
                       <label>
@@ -471,6 +486,7 @@ export function Studio() {
                       <SourcePanel
                         key={`${analysis.id}-${analysis.revision}`}
                         analysis={analysis}
+                        version={version}
                         run={run}
                         busy={!!busy}
                       />
@@ -621,11 +637,11 @@ export function Studio() {
               Local storage · Manual generation · Reusable assets
             </span>
             <a
-              href="https://ai.google.dev/gemini-api/docs/pricing"
+              href="https://github.com/decolua/9router"
               target="_blank"
               rel="noreferrer"
             >
-              Gemini API charges ↗
+              9router setup ↗
             </a>
           </footer>
         </main>
@@ -640,16 +656,14 @@ export function Studio() {
           e.target.value = "";
         }}
       />
-      <ApiKeyDialog
+      <RouterSettingsDialog
         open={settings}
-        initialApiKey={apiKey}
-        initialModel={model}
+        initial={connection}
+        serverSettings={routerSettings}
         onClose={() => setSettings(false)}
-        onSave={(key, next) => {
-          saveApiKey(key);
-          saveModel(next);
-          setApiKey(key);
-          setModel(next);
+        onSave={(next) => {
+          saveConnection(next);
+          setConnection(next);
           setSettings(false);
         }}
       />

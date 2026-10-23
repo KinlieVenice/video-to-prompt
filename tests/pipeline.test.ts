@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { readFile, rm } from "node:fs/promises";
 import { unzipSync, strFromU8 } from "fflate";
+import { defaultConnection } from "../app/lib/studio/connection";
 import { POST, GET } from "../app/api/studio/route";
 import { GET as getAsset } from "../app/api/assets/[asset]/route";
 import { run, probe } from "../app/lib/studio/server/ffmpeg";
@@ -198,35 +199,46 @@ test("Phase 2: TTS preserves exact Taglish and profanity, caches audio, saves ta
   globalThis.fetch = (async (_url, options) => {
     calls++;
     const body = JSON.parse(String(options?.body));
-    assert.equal(body.input[0].content[0].text, analysis.turns[0].text);
-    assert.match(body.input[0].content[0].annotations[0].style, /shouting/);
-    return Response.json({
-      status: "completed",
-      steps: [
-        {
-          type: "model_output",
-          content: [{ type: "audio", mime_type: "audio/wav", data: wav }],
-        },
-      ],
+    assert.ok(String(_url).endsWith("/v1/audio/speech"));
+    assert.equal(body.input, analysis.turns[0].text);
+    assert.equal(
+      body.model,
+      `${character.voice.model}/${character.voice.voiceId}`,
+    );
+    assert.match(body.style, /shouting/);
+    return new Response(Buffer.from(wav, "base64"), {
+      headers: { "Content-Type": "audio/wav" },
     });
   }) as typeof fetch;
   try {
     const first = await action("generate_line", {
       turnId: "line1",
-      apiKey: "fake-test-key",
+      connection: {
+        ...defaultConnection(),
+        apiKey: "fake-test-key",
+        ttsEnabled: true,
+      },
     });
     assert.equal(first.response.status, 200, JSON.stringify(first.body));
     project = first.body.projects[0];
     const again = await action("generate_line", {
       turnId: "line1",
-      apiKey: "fake-test-key",
+      connection: {
+        ...defaultConnection(),
+        apiKey: "fake-test-key",
+        ttsEnabled: true,
+      },
     });
     assert.equal(again.response.status, 200);
     assert.equal(calls, 1);
     assert.equal(again.body.projects[0].versions[0].audioTakes.line1.length, 1);
     const regenerated = await action("generate_line", {
       turnId: "line1",
-      apiKey: "fake-test-key",
+      connection: {
+        ...defaultConnection(),
+        apiKey: "fake-test-key",
+        ttsEnabled: true,
+      },
       regenerate: true,
     });
     assert.equal(regenerated.response.status, 200);
@@ -324,8 +336,8 @@ test("Phase 3: original frames, adapter replacement, cached images and character
     segment,
     frames,
     [character],
-    "gemini-nano-banana-2.1",
-    "fake",
+    "cx/gpt-image-2",
+    defaultConnection(),
   );
   const cached = await service.generate(
     analysis,
@@ -333,8 +345,8 @@ test("Phase 3: original frames, adapter replacement, cached images and character
     segment,
     frames,
     [character],
-    "gemini-nano-banana-2.1",
-    "fake",
+    "cx/gpt-image-2",
+    defaultConnection(),
   );
   assert.equal(count, 2);
   assert.deepEqual(cached, generated);
@@ -457,46 +469,8 @@ test("Phase 4: FFmpeg imports and assembles all four audio modes, portrait, capt
   );
 });
 
-test("Phase 2: designed voices use the official persistent voice request and save its preview", async () => {
-  const wav = await readFile(
-    assetPath(await VoiceService.extractOriginal(sourceAsset)),
-  );
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (url, options) => {
-    assert.ok(String(url).endsWith("/v1beta/voices"));
-    const body = JSON.parse(String(options?.body));
-    assert.equal(body.store, true);
-    assert.equal(body.voice.type, "prompted");
-    assert.equal(
-      body.voice.prompted.input,
-      "A warm, expressive Filipino performer.",
-    );
-    return Response.json({
-      id: "voice_test",
-      sample_audio: { mime_type: "audio/wav", data: wav.toString("base64") },
-    });
-  }) as typeof fetch;
-  try {
-    const designed = await VoiceService.design(
-      {
-        ...character,
-        voice: {
-          ...character.voice,
-          designPrompt: "A warm, expressive Filipino performer.",
-        },
-      },
-      "fake-test-key",
-    );
-    assert.equal(designed.voice.kind, "DESIGNED");
-    assert.equal(designed.voice.voiceId, "voice_test");
-    assert.ok(designed.voice.previewAsset);
-    assert.equal(
-      (await probe(assetPath(designed.voice.previewAsset!))).hasAudio,
-      true,
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test("Phase 2: unsupported voice design fails explicitly without sending a provider request", async () => {
+  await assert.rejects(() => VoiceService.design(), /not supported/);
 });
 
 test("Phase 5: persisted state excludes API keys; assets support seeking and reject traversal", async () => {

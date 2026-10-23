@@ -654,6 +654,18 @@ summary {
   gap: 18px;
   min-width: 0;
 }
+
+.router-dialog {
+  color: var(--foreground);
+  background: var(--muted);
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  margin: auto;
+  overflow-y: auto;
+}
+.router-dialog::backdrop {
+  background: rgb(0 0 0 / 75%);
+}
 .stack > .panel-heading {
   margin-bottom: 0;
 }

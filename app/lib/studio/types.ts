@@ -10,12 +10,56 @@ export type MediaInfo = {
   fps: number;
   hasAudio: boolean;
 };
+export type MotionBeat = Interval & {
+  id: string;
+  action: string;
+  phase: "SETUP" | "ACTION" | "REACTION" | "RECOVERY" | "HOLD";
+  importance: "KEY" | "NORMAL";
+  confidence: "LOW" | "MEDIUM" | "HIGH";
+  evidenceTimes: number[];
+  anchorTime: number;
+  frameAsset?: string;
+  reviewed: boolean;
+  timingKind?: "ACTIVITY" | "TRANSITION" | "OBSERVATION";
+  onset?: Interval;
+  continuing?: boolean;
+  settled?: boolean;
+  stateBefore?: string;
+  stateAfter?: string;
+  evidence?: {
+    before: { time: number; asset: string };
+    after: { time: number; asset: string };
+  };
+  timingNotes?: string[];
+};
+export type ContinuityState = {
+  pose: string;
+  hands: string;
+  objects: string;
+  ongoingAction: string;
+  settled: boolean;
+};
+export type MotionWindowState = Interval & {
+  state: ContinuityState;
+  frameTime: number;
+  frameAsset: string;
+};
+export type MotionSampling = {
+  version: 2 | 3;
+  times: number[];
+  windows: number;
+  requests: number;
+  maxGap: number;
+};
 export type Shot = Interval & {
   id: string;
   description: string;
   camera: string;
   motion: string;
   lighting: string;
+  motionBeats?: MotionBeat[];
+  motionSampling?: MotionSampling;
+  motionWindows?: MotionWindowState[];
 };
 export type Speaker = { id: string; name: string; description: string };
 export type Turn = Interval & {
@@ -38,12 +82,13 @@ export type Analysis = {
   activity: Interval[];
   status: "LOCAL" | "ANALYZED";
   model?: string;
+  provider?: "OPENAI_9ROUTER";
   warnings: string[];
   createdAt: string;
   revision: number;
 };
 export type VoiceProfile = {
-  provider: "GEMINI";
+  provider: "OPENAI" | "GEMINI";
   model: string;
   kind: "PREBUILT" | "DESIGNED";
   voiceId: string;
@@ -83,12 +128,19 @@ export type Segment = Interval & {
 export type Frames = {
   first: string;
   last: string;
-  generated?: { first: string; last: string; signature: string };
+  moments?: { beatId: string; time: number; asset: string; action: string }[];
+  generated?: {
+    first: string;
+    last: string;
+    signature: string;
+    inheritedFrom?: { segmentId: string; signature: string; asset: string };
+  };
 };
 export type ImportedClip = { asset: string; media: MediaInfo; trim: number };
 export type Version = {
   id: string;
   name: string;
+  sourceRange?: Interval;
   mappings: Record<string, string>;
   audioMode: AudioMode;
   uploadedAudio?: string;
@@ -126,17 +178,12 @@ export type StudioState = {
   characters: Character[];
 };
 
-export const TTS_MODELS = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"];
-export const ANALYSIS_MODELS = [
-  "gemini-3.8-flash",
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
+export const TTS_MODELS = [
+  "openai/gpt-4o-mini-tts",
+  "openai/tts-1",
+  "openai/tts-1-hd",
 ];
-export const IMAGE_MODELS = [
-  "gemini-nano-banana-2.1",
-  "gemini-3.1-flash-image",
-  "gemini-3-pro-image",
-];
+export const IMAGE_MODELS = ["cx/gpt-image-2"];
 export const STRATEGIES: Record<Strategy, string> = {
   FRAMES: "Frames to video",
   FIRST_LAST: "First + last frame",
@@ -146,10 +193,10 @@ export const STRATEGIES: Record<Strategy, string> = {
 };
 export function defaultVoice(): VoiceProfile {
   return {
-    provider: "GEMINI",
+    provider: "OPENAI",
     model: TTS_MODELS[0],
     kind: "PREBUILT",
-    voiceId: "Kore",
+    voiceId: "alloy",
     language: "auto",
     style: "",
     speed: 1,

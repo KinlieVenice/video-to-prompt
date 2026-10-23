@@ -1,10 +1,13 @@
 import type { StudioState } from "./types";
+import type { PublicRouterSettings } from "./connection";
 export type StudioResponse = StudioState & {
   error?: string;
   asset?: string;
   projectId?: string;
   versionId?: string;
   ffmpegReady?: boolean;
+  models?: string[];
+  routerSettings?: PublicRouterSettings;
 };
 export async function studioRequest(
   action: string,

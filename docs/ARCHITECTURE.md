@@ -1,6 +1,6 @@
 # Local reenactment pipeline
 
-This is a single-user Next.js Node application. It uses the existing TypeScript/React app and Gemini SDK Files API. Current generation requests use the documented REST Interactions and Voices APIs, avoiding a dependency on SDK features missing from the original pinned SDK.
+This is a single-user Next.js Node application. This branch uses OpenAI-compatible chat completions through a configured local 9router instance. FFmpeg extracts timestamped JPEG frames; the source video is not sent to a chat endpoint. Transcription is a separate local Whisper worker, manual entry, or an explicitly selected timestamp-capable 9router speech route. No Studio action calls Gemini.
 
 ## Persistence
 
@@ -17,26 +17,30 @@ All paths are relative to the local data directory. Atomic temporary-file rename
 
 Reuploading identical source bytes reuses the source analysis. Multiple projects can point to that analysis; source corrections affect them all. Versions can have different mappings, audio modes, plans, clips and export settings. Character profiles are reusable shared records; editing one affects its linked versions. Create another profile when preserving a different character identity or voice variant. Duplicating a version copies its mappings and saved asset assignments without rerunning analysis.
 
-The browser stores only the Gemini key, selected analysis model, and last project ID. The key is sent to the local server only for provider actions; it is not saved in JSON, manifests or assets. Gemini actions send the relevant media/text/images to Google. Project storage is local, not a promise that AI analysis works offline.
+The browser stores the 9router connection, transcript mode, optional route switches and last project ID. Non-empty `NINE_ROUTER_BASE_URL`, `NINE_ROUTER_API_KEY` and `NINE_ROUTER_MODEL` server environment variables override browser connection values. The environment key never leaves the server for the browser; GET returns only a configured flag plus the public URL/model. Browser keys, when used, are forwarded only for provider actions and model discovery. Keys are not saved in project JSON, manifests or assets. Old Gemini credentials are not migrated. Visual analysis sends sampled frames and transcript context through 9router; optional image and speech actions send their own inputs through the router. Base URLs must use loopback HTTP(S) without embedded credentials, queries or fragments, and redirects are rejected. Provider error bodies are not reflected in the UI because they can echo media or credentials. Project storage is local, not a promise that AI analysis works offline.
 
 ## Service boundaries
 
-| Service                     | Responsibility                                                                                             |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `VideoAnalysisService`      | FFprobe metadata, FFmpeg hard cuts and audio evidence; cached Gemini visual analysis                       |
-| `SpeakerDiarizationService` | Separate audio-only speaker transcription; decimal timestamps; conservative activity-boundary snapping     |
-| `CharacterService`          | Validate and persist reusable character and voice profiles                                                 |
-| `VoiceService`              | Exact per-turn TTS, previews, designed voices, cached WAV takes, original-audio extraction                 |
-| `KeyframeService`           | First/last source frames and cached image replacement through `ImageGenerationProvider`                    |
-| `ScenePlannerService`       | Hard-cut-safe segment coverage, pause preference, supported durations, controlled overlap and credits      |
-| `PromptGenerationService`   | Character-agnostic manual Flow prompts with original dialogue and motion timing                            |
-| `VideoAssemblyService`      | Clip validation/trim/normalization, concat, aligned audio, captions, disclosure, MP4 and Flow ZIP packages |
+| Service                     | Responsibility                                                                                                  |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `VideoAnalysisService`      | FFprobe metadata, FFmpeg hard cuts and audio evidence; cached OpenAI analysis of timestamped frames via 9router |
+| `SpeakerDiarizationService` | Local Whisper or router speech segments with timestamps; manual speaker attribution; strict validation          |
+| `CharacterService`          | Validate and persist reusable character and voice profiles                                                      |
+| `VoiceService`              | Optional 9router per-turn TTS, previews, cached normalized WAV takes, original-audio extraction                 |
+| `KeyframeService`           | First/last source frames and cached image replacement through `ImageGenerationProvider`                         |
+| `ScenePlannerService`       | Hard-cut-safe segment coverage, pause preference, supported durations, controlled overlap and credits           |
+| `PromptGenerationService`   | Character-agnostic manual Flow prompts with original dialogue and motion timing                                 |
+| `VideoAssemblyService`      | Clip validation/trim/normalization, concat, aligned audio, captions, disclosure, MP4 and Flow ZIP packages      |
 
 `POST /api/studio` accepts multipart form data: `action`, JSON `payload`, and an optional `file`. IDs and edit payloads are validated. `GET /api/studio` loads the saved state. `/api/assets/<uuid.ext>` supports byte ranges for video seeking. Host and Origin checks constrain these APIs to the local workspace. FFmpeg runs directly with argument arrays, without a shell.
 
 ## Timing and quality
 
-FFmpeg evaluates scene changes on scaled frames without reducing the source frame rate. `silencedetect` yields independently measured audio activity. Activity is not word alignment or proof of speech: music, overlapping voices, noise and quick cuts still need review. Gemini provides a draft transcript and speaker labels; nearby activity endpoints can refine timestamps within 150ms. The visual pass links anonymous speakers to visible actors where supported and includes silent actors. Uncertain identities remain reviewable.
+FFmpeg evaluates scene changes on scaled frames without reducing the source frame rate. `silencedetect` yields independently measured audio activity. Activity is not word alignment or proof of speech: music, overlapping voices, noise and quick cuts still need review. Local Whisper provides a timestamped draft transcript without diarization. Router transcription must return timestamped segments; text-only responses are rejected rather than assigning invented timings. Unlabeled segments are explicitly marked unassigned, and speaker labels require review. Existing edited turns are kept exactly. Audio activity is not used to force unrelated words into music/silence intervals.
+
+`OpenAIAnalysisProvider` uses `MotionAnalysisService` to cover shots in windows of at most eight seconds, with half-second baseline samples, quarter-second sampling near measured frame changes and up to one additional key-beat refinement pass. Each request is capped at 33 frames at width 768. Observed activity spans and optional onset brackets are separate; estimates are widened to surrounding samples. Before/after evidence and original key-pose images are cached. Later windows receive the preceding final image and explicit pose/hand/object state. Only genuine shot starts can introduce setup; unsettled interventions cannot be labeled recovery. The prompt prohibits inventing dialogue, vocal emotion or actions between samples. Visual actors are separate from unassigned audio speakers; a frame-only model is not asked to pretend to hear a speaker. Text/gesture/camera accuracy still requires review. Window/stage requests are independently cached with source, shot, transcript, actor context, normalized router base URL, model and adapter version. Failed later stages/windows can resume without repeating successful earlier ones. Motion-only refinement preserves transcript, actors, scene descriptions, cuts and human-reviewed beats. See MOTION_ANALYSIS.md for timing semantics and package details. Analyses become complete only after every window succeeds; failed refinement leaves the prior saved analysis intact. Changing cast or voice never triggers analysis.
+
+`RouterConnection` is request context, never part of a saved project. TTS and image caches include the router URL so changing route does not silently reuse different provider outputs. The API client does not implement model fallback; any 9router-side fallback remains the user's router configuration.
 
 Shot corrections must cover the complete source without gaps/overlap. Speaker turns can overlap or cross camera cuts. The planner never merges shots; long continuous shots prefer nearby turn ends/pauses without adding avoidable generations. Unsupported 10-second Veo Lite plans are rejected. Extension starts with a new frame-based generation and only continues within the same shot. The 2D strategy is an external render/import fallback, not a built-in rigging engine.
 
@@ -45,3 +49,17 @@ Each generated take is immutable. Text, emotion or saved voice changes make it s
 Generation overlap is discarded from the beginning of the next clip. Export rounds cumulative frame boundaries at 30fps to avoid accumulating per-clip drift. Letterboxing preserves composition in 1280×720 or 720×1280. Final duration is checked within 100ms. Original mode preserves the recorded performance; MP4 encoding converts its soundtrack to AAC. Captions are optional MP4 subtitle tracks; disclosure is a visible overlay. Mouth synchronization is reviewed manually, not automatically scored or repaired.
 
 Originals, generated outputs and intermediate files remain on disk for reuse. There is no automatic destructive cache cleanup. Back up the complete data directory, and monitor disk space for long projects. The 512MB/10-minute source limit keeps the in-memory multipart MVP manageable; use short clips for low-cost iteration.
+
+Each version can save an optional `sourceRange`; absent ranges retain the full-source behavior of existing projects. The shared range validator rejects endpoints outside the original or intervals shorter than one export frame. Planning intersects shots with the selection while retaining source timestamps and shot IDs. Changing the range invalidates the plan and export without changing analysis or another version. Assembly validates coverage of the selection, rounds frames relative to its start, applies audio offsets on the source timeline, then trims/rebases audio and captions to output time zero. TTS takes are required only for dialogue intersecting the selection. Flow manifests include the selected range.
+
+Shot splits can be undone while editing, and visible remove-cut controls merge saved or unsaved adjacent shots. Merging rejoins fragments of the same motion beat without duplicate IDs, preserves timing evidence where possible and clears affected verification. The complete analysis timeline remains required; range selection never deletes source analysis.
+
+## Optional media adapters and compatibility
+
+`OpenAIImageProvider` uses 9router's JSON `/v1/images/generations` extension with ordered `images` data URLs (source first, character references next), not the official OpenAI image-edits schema. The selected route must support references; the default example is `cx/gpt-image-2`. Returned PNG signatures and FFprobe dimensions are validated before use. Each endpoint is cached separately.
+
+`VoiceService` uses 9router's `/v1/audio/speech` with provider/model/voice encoded in the model route. OpenAI's router adapter currently may drop style/instruction metadata and returns MP3 regardless of requested WAV; FFmpeg normalizes actual binary output to cached WAV. These limitations are surfaced to the user. Speech generation and image generation are disabled until explicitly enabled in Settings. Voice design is explicitly unsupported on this route. Saved legacy Gemini voices and takes remain readable; generating new speech requires choosing an OpenAI voice explicitly.
+
+The local Python worker is `scripts/transcribe.py`; it runs with an argument array, without a shell, under `STUDIO_PYTHON` (default `python`). It uses multilingual faster-whisper, outputs UTF-8 JSON and has a 15-minute timeout. Missing Python/dependencies produce setup instructions and the manual-transcript alternative. No package installation or model download is triggered by opening or uploading to the app; the model download occurs on first local transcription.
+
+Continuous segments with zero overlap share a canonical source boundary pose. Replacement first frames can inherit a matching prior last frame, with lineage in the frame cache/signature. Cast/model/route mismatches, cuts, overlaps and stale ancestors prevent inheritance. The Flow UI marks invalidated parent links. See MOTION_ANALYSIS.md for detailed timing semantics and evidence review.

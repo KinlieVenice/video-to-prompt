@@ -8,6 +8,7 @@ import type {
 } from "../../lib/studio/types";
 import { assetUrl, seconds, speechInput } from "../../lib/studio/types";
 import type { StudioAction } from "./Studio";
+import { reenactmentRange } from "../../lib/studio/range";
 
 const MODES: { id: AudioMode; name: string; description: string }[] = [
   {
@@ -46,6 +47,7 @@ export function AudioPanel({
   run: StudioAction;
   busy: boolean;
 }) {
+  const range = reenactmentRange(analysis, version);
   return (
     <div className="stack">
       <section className="panel stack">
@@ -54,6 +56,11 @@ export function AudioPanel({
         <p className="muted">
           Original audio is the default. Each version can use a different mix
           without repeating video analysis.
+        </p>
+        <p className="hint">
+          Export uses source {seconds(range.start)}–{seconds(range.end)}. Audio
+          offsets are applied on the source timeline before this interval is
+          trimmed.
         </p>
         <div className="mode-grid">
           {MODES.map((mode) => (
@@ -131,7 +138,9 @@ export function AudioPanel({
           )}
           <p className="hint">
             Short recordings are padded with silence. Longer recordings are
-            trimmed to the source duration.
+            trimmed to the selected source interval. Recordings align to the
+            full source timeline; use the audio offset to position a shorter
+            recording.
           </p>
         </section>
       )}

@@ -27,10 +27,15 @@ export default defineConfig({
     launchOptions: installed ? { executablePath: installed } : undefined,
   },
   webServer: {
-    command: "npm run dev -- --port 3100",
+    command: "npm run start -- --port 3100",
     url: "http://127.0.0.1:3100",
     reuseExistingServer: false,
     timeout: 120_000,
-    env: { STUDIO_DATA_DIR: path.resolve(`.tmp/e2e-data-${Date.now()}`) },
+    env: {
+      STUDIO_DATA_DIR: path.resolve(`.tmp/e2e-data-${Date.now()}`),
+      NINE_ROUTER_BASE_URL: "",
+      NINE_ROUTER_API_KEY: "",
+      NINE_ROUTER_MODEL: "",
+    },
   },
 });

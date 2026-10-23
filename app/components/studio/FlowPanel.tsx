@@ -24,6 +24,12 @@ import {
 import { supportedDurations } from "../../lib/studio/services/ScenePlannerService";
 import { PromptGenerationService } from "../../lib/studio/services/PromptGenerationService";
 import type { StudioAction } from "./Studio";
+import { segmentMotionText } from "../../lib/studio/motion";
+import { reenactmentRange } from "../../lib/studio/range";
+import {
+  continuousPredecessor,
+  referenceLinkCurrent,
+} from "../../lib/studio/references";
 
 function ScenePreview({
   analysis,
@@ -74,6 +80,7 @@ export function FlowPanel({
   const [copyError, setCopyError] = useState("");
   const stale = version.planRevision !== analysis.revision;
   const total = version.segments.reduce((n, s) => n + s.credits, 0);
+  const range = reenactmentRange(analysis, version);
   const copy = async (id: string, prompt: string) => {
     try {
       await navigator.clipboard.writeText(prompt);
@@ -206,13 +213,22 @@ export function FlowPanel({
           </label>
           <label>
             Image provider model
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
+            <input
+              list="image-models"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            />
+            <datalist id="image-models">
               {IMAGE_MODELS.map((m) => (
                 <option key={m} value={m}>
                   {m}
                 </option>
               ))}
-            </select>
+            </datalist>
+            <span className="hint">
+              Full reference-capable 9router image model ID. Enable the optional
+              image route in Settings first.
+            </span>
           </label>
         </div>
         <label className="checkbox">
@@ -256,8 +272,10 @@ export function FlowPanel({
           <span>estimated Flow credits</span>
         </div>
         <div>
-          <strong>{seconds(analysis.media.duration)}</strong>
-          <span>source timing preserved</span>
+          <strong>{seconds(range.end - range.start)}</strong>
+          <span>
+            selected source {seconds(range.start)}–{seconds(range.end)}
+          </span>
         </div>
         <a
           className="text-link"
@@ -270,8 +288,8 @@ export function FlowPanel({
       </div>
       <p className="hint">
         Baseline checked 23 Oct 2026. One generation per segment, before
-        retries, variants or upscaling. Credits are separate from Gemini API
-        charges. Confirm the current quote in Flow.
+        retries, variants or upscaling. Credits are separate from OpenAI /
+        9router charges. Confirm the current quote in Flow.
       </p>
       {stale && version.segments.length > 0 && (
         <p className="notice">
@@ -418,6 +436,24 @@ export function FlowPanel({
                     );
                   })}
                 </div>
+                {continuousPredecessor(version, segment) && (
+                  <p className="hint">
+                    Continuous shot: generate the preceding segment's references
+                    first to reuse its final replaced pose as this segment's
+                    first frame.
+                  </p>
+                )}
+                {frames?.generated?.inheritedFrom && (
+                  <p
+                    className={
+                      referenceLinkCurrent(version, segment) ? "hint" : "notice"
+                    }
+                  >
+                    {referenceLinkCurrent(version, segment)
+                      ? "First replaced frame reuses the preceding segment's final pose."
+                      : "The preceding reference changed. Regenerate these references to restore continuity."}
+                  </p>
+                )}
                 <button
                   className="button fit"
                   disabled={busy || stale}
@@ -428,6 +464,36 @@ export function FlowPanel({
                   <Sparkles size={14} />
                   Generate replaced frames · up to 2 image charges
                 </button>
+                {!!frames?.moments?.length && (
+                  <div className="stack">
+                    <span className="eyebrow">
+                      KEY ACTION POSES · SOURCE REFERENCES
+                    </span>
+                    <div className="character-references">
+                      {frames.moments.map((moment) => (
+                        <a
+                          key={moment.beatId}
+                          href={assetUrl(moment.asset)}
+                          download
+                        >
+                          <img
+                            src={assetUrl(moment.asset)}
+                            alt={`Source key pose at ${moment.time.toFixed(3)} seconds`}
+                          />
+                          <small>
+                            {(moment.time - segment.start).toFixed(3)}s in
+                            segment
+                          </small>
+                        </a>
+                      ))}
+                    </div>
+                    <p className="hint">
+                      Original actors are visible in these pose references. Use
+                      them for motion/composition and your Flow character for
+                      identity.
+                    </p>
+                  </div>
+                )}
                 <div className="character-references">
                   {cast.flatMap((c) =>
                     c.references.map((asset, n) => (
@@ -448,7 +514,9 @@ export function FlowPanel({
                 <details>
                   <summary>Timestamped motion plan</summary>
                   <p className="small-code">
-                    {shot?.motion || "Add motion beats in Source & analysis."}
+                    {shot
+                      ? segmentMotionText(shot, segment)
+                      : "Add motion beats in Source & analysis."}
                   </p>
                 </details>
                 <div className="prompt-box">

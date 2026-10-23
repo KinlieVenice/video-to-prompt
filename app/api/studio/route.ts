@@ -2,13 +2,19 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { stat } from "node:fs/promises";
 import {
-  ANALYSIS_MODELS,
   newVersion,
   type Analysis,
   type Character,
   type Project,
   type Version,
 } from "../../lib/studio/types";
+import { connectionSchema } from "../../lib/studio/connection";
+import { reenactmentRange } from "../../lib/studio/range";
+import {
+  resolveRouterConnection,
+  publicRouterSettings,
+} from "../../lib/studio/server/connection";
+import { routerModels } from "../../lib/studio/server/openai";
 import {
   analysisEditSchema,
   characterSchema,
@@ -26,6 +32,7 @@ import {
 import { localRequest } from "../../lib/studio/server/http";
 import { binary, probe, probeImage } from "../../lib/studio/server/ffmpeg";
 import { VideoAnalysisService } from "../../lib/studio/services/VideoAnalysisService";
+import { MotionAnalysisService } from "../../lib/studio/services/MotionAnalysisService";
 import { CharacterService } from "../../lib/studio/services/CharacterService";
 import { VoiceService } from "../../lib/studio/services/VoiceService";
 import { ScenePlannerService } from "../../lib/studio/services/ScenePlannerService";
@@ -44,8 +51,8 @@ const payloadSchema = z.object({
   segmentId: identifier.optional(),
   turnId: identifier.optional(),
   analysisId: identifier.optional(),
-  apiKey: z.string().max(300).optional(),
-  model: z.string().max(100).optional(),
+  connection: connectionSchema.optional(),
+  model: z.string().trim().max(200).optional(),
   value: z.unknown().optional(),
   regenerate: z.boolean().optional(),
   name: z.string().max(200).optional(),
@@ -75,7 +82,11 @@ export async function GET(request: Request) {
       () => false,
     );
     return Response.json(
-      { ...(await state()), ffmpegReady: ffmpegReady && ffprobeReady },
+      {
+        ...(await state()),
+        ffmpegReady: ffmpegReady && ffprobeReady,
+        routerSettings: publicRouterSettings(),
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
@@ -162,6 +173,12 @@ export async function POST(request: Request) {
       };
       let result: Record<string, unknown> = {};
       switch (action) {
+        case "models": {
+          result = {
+            models: await routerModels(resolveRouterConnection(p.connection)),
+          };
+          break;
+        }
         case "create_project": {
           const uploaded = await upload(["mp4", "mov"]);
           const inspected = await VideoAnalysisService.inspect(
@@ -178,13 +195,29 @@ export async function POST(request: Request) {
           result = { projectId: project.id };
           break;
         }
-        case "analyze": {
+        case "analyze":
+        case "refine_motion": {
           const ctx = needVersion();
-          await VideoAnalysisService.analyze(
+          const updated = await VideoAnalysisService.analyze(
             ctx.analysis,
-            p.apiKey || "",
-            p.model || ANALYSIS_MODELS[0],
+            resolveRouterConnection(p.connection),
+            action === "refine_motion",
           );
+          if (updated.revision !== ctx.analysis.revision) {
+            for (const saved of snapshot.projects.filter(
+              (item) => item.analysisId === ctx.analysis.id,
+            )) {
+              saved.versions.forEach((v) => {
+                v.exportAsset = undefined;
+                v.exportSignature = undefined;
+              });
+              await saveRecord("projects", saved);
+              if (saved.id === project?.id) {
+                project = saved;
+                version = saved.versions.find((v) => v.id === p.versionId);
+              }
+            }
+          }
           break;
         }
         case "save_analysis": {
@@ -193,6 +226,35 @@ export async function POST(request: Request) {
             analysisEditSchema.parse(p.value),
             ctx.analysis.media.duration,
           );
+          for (const shot of edited.shots)
+            for (const beat of shot.motionBeats || [])
+              if (
+                beat.timingKind &&
+                (!beat.evidence ||
+                  beat.evidence.before.time !==
+                    (beat.onset?.start ?? beat.start) ||
+                  beat.evidence.after.time !== (beat.onset?.end ?? beat.end))
+              )
+                beat.evidence = await MotionAnalysisService.evidence(
+                  ctx.analysis.sourceHash,
+                  ctx.analysis.sourceAsset,
+                  beat,
+                  {
+                    start: shot.start,
+                    end: shot.end,
+                    fps: ctx.analysis.media.fps,
+                  },
+                );
+          for (const shot of edited.shots)
+            for (const beat of shot.motionBeats || [])
+              if (beat.evidence)
+                beat.evidenceTimes = [
+                  ...new Set([
+                    ...beat.evidenceTimes,
+                    beat.evidence.before.time,
+                    beat.evidence.after.time,
+                  ]),
+                ].sort((a, b) => a - b);
           await saveRecord("analyses", {
             ...ctx.analysis,
             ...edited,
@@ -277,6 +339,12 @@ export async function POST(request: Request) {
         case "save_version": {
           const ctx = needVersion(),
             edited = versionEditSchema.parse(p.value);
+          const selected = reenactmentRange(ctx.analysis, {
+            sourceRange: edited.sourceRange ?? ctx.version.sourceRange,
+          });
+          const oldRange = reenactmentRange(ctx.analysis, ctx.version);
+          const rangeChanged =
+            selected.start !== oldRange.start || selected.end !== oldRange.end;
           for (const [speakerId, characterId] of Object.entries(
             edited.mappings,
           )) {
@@ -304,7 +372,7 @@ export async function POST(request: Request) {
             JSON.stringify(edited.mappings) !==
             JSON.stringify(ctx.version.mappings);
           Object.assign(ctx.version, edited);
-          if (planChanged) ctx.version.planRevision = undefined;
+          if (planChanged || rangeChanged) ctx.version.planRevision = undefined;
           if (castChanged) {
             ctx.version.clips = {};
             Object.values(ctx.version.frames).forEach((f) => {
@@ -349,7 +417,7 @@ export async function POST(request: Request) {
           const take = await VoiceService.generate(
             turn,
             character,
-            p.apiKey || "",
+            resolveRouterConnection(p.connection),
             p.regenerate,
           );
           const takes = ctx.version.audioTakes[turn.id] || [];
@@ -389,7 +457,7 @@ export async function POST(request: Request) {
           const take = await VoiceService.generate(
             turn,
             character,
-            p.apiKey || "",
+            resolveRouterConnection(p.connection),
           );
           await CharacterService.save({
             ...character,
@@ -402,9 +470,7 @@ export async function POST(request: Request) {
             (c) => c.id === p.characterId,
           );
           if (!character) throw new Error("Save this character first.");
-          await CharacterService.save(
-            await VoiceService.design(character, p.apiKey || ""),
-          );
+          await CharacterService.save(await VoiceService.design());
           await invalidateCharacter(character.id, false);
           break;
         }
@@ -445,8 +511,8 @@ export async function POST(request: Request) {
               ctx.segment,
               frames,
               snapshot.characters,
-              p.model || "gemini-nano-banana-2.1",
-              p.apiKey || "",
+              p.model || "cx/gpt-image-2",
+              resolveRouterConnection(p.connection),
             );
           break;
         }

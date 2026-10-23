@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
   outputFileTracingExcludes: {
     "/*": ["./.studio/**/*", "./.tmp/**/*", "./.studio-test-*/**/*"],
   },
+  outputFileTracingIncludes: { "/api/studio": ["./scripts/transcribe.py"] },
   turbopack: {
     root: path.join(__dirname),
   },

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 import ffmpegPath from "ffmpeg-static";
 import ffprobeStatic from "ffprobe-static";
 import type { MediaInfo } from "../types";
@@ -81,6 +82,84 @@ export async function probe(file: string): Promise<MediaInfo> {
     ),
   };
 }
+
+// A container's audio can outlast its video. FFmpeg can exit successfully after
+// seeking into that tail without writing an image. Use the last observed video
+// frame at or before the requested time, keeping the full source/audio timeline.
+export async function extractSourceFrame(
+  source: string,
+  output: string,
+  time: number,
+  options: { width?: number; quality?: number } = {},
+) {
+  if (!Number.isFinite(time) || time < 0)
+    throw new Error("Choose a finite, non-negative source frame time.");
+  const capture = async (timestamp: number) => {
+    await run("ffmpeg", [
+      "-y",
+      "-ss",
+      String(timestamp),
+      "-i",
+      source,
+      "-map",
+      "0:v:0",
+      "-frames:v",
+      "1",
+      ...(options.width ? ["-vf", `scale=${options.width}:-2`] : []),
+      ...(options.quality ? ["-q:v", String(options.quality)] : []),
+      "-update",
+      "1",
+      output,
+    ]);
+    try {
+      return (await stat(output)).size > 0;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  };
+  if (await capture(time)) return;
+
+  // Decode timestamps only on an empty seek. Stream duration / average FPS alone
+  // cannot locate the final real frame reliably for variable-frame-rate media.
+  const { stdout } = await run("ffprobe", [
+    "-v",
+    "error",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "format=start_time,duration:frame=best_effort_timestamp_time",
+    "-of",
+    "json",
+    source,
+  ]);
+  const info = JSON.parse(stdout);
+  const duration = Number(info.format?.duration);
+  const origin = Number(info.format?.start_time || 0);
+  const times: number[] = (info.frames || [])
+    .map(
+      (frame: { best_effort_timestamp_time?: string }) =>
+        Number(frame.best_effort_timestamp_time) - origin,
+    )
+    .filter(
+      (timestamp: number) => Number.isFinite(timestamp) && timestamp <= time,
+    );
+  const last = times.length
+    ? times.reduce((latest, timestamp) => Math.max(latest, timestamp))
+    : undefined;
+  if (
+    Number.isFinite(duration) &&
+    time < duration &&
+    last !== undefined &&
+    // Account for the precision of ffprobe's printed timestamps.
+    (await capture(Math.max(0, last - 0.000001)))
+  )
+    return;
+  throw new Error(
+    "No source frame exists at the requested time. Choose a time inside the video.",
+  );
+}
+
 export async function probeImage(file: string) {
   const { stdout } = await run("ffprobe", [
     "-v",

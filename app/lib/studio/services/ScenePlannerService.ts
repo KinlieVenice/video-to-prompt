@@ -1,4 +1,6 @@
 import type { Analysis, Segment, Strategy, Target, Version } from "../types";
+import { criticalTiming } from "../motion";
+import { reenactmentRange } from "../range";
 
 export const DURATIONS: Record<Target, number[]> = {
   VEO_LITE: [4, 6, 8],
@@ -24,6 +26,7 @@ export function flowCredits(
 }
 export class ScenePlannerService {
   static plan(analysis: Analysis, version: Version): Segment[] {
+    const range = reenactmentRange(analysis, version);
     const supported = supportedDurations(version.target, version.strategy);
     const allowed = supported.filter((d) => d <= version.maxDuration);
     if (!allowed.length || !supported.includes(version.maxDuration))
@@ -32,7 +35,13 @@ export class ScenePlannerService {
       throw new Error("Veo Lite extension requires the Veo Lite target.");
     const maximum = Math.max(...allowed),
       segments: Segment[] = [];
-    for (const shot of analysis.shots) {
+    for (const original of analysis.shots) {
+      const shot = {
+        ...original,
+        start: Math.max(original.start, range.start),
+        end: Math.min(original.end, range.end),
+      };
+      if (shot.end <= shot.start) continue;
       let start = shot.start,
         previous: string | undefined;
       while (start < shot.end - 0.001) {
@@ -50,11 +59,25 @@ export class ScenePlannerService {
           for (const span of analysis.activity)
             if (span.end > start + maximum - 1.5 && span.end <= ideal)
               candidates.add(span.end);
+          for (const beat of shot.motionBeats || [])
+            if (beat.importance === "KEY")
+              for (const point of [beat.start, beat.end])
+                if (point > start + maximum - 1.5 && point <= ideal)
+                  candidates.add(point);
           const score = (point: number) =>
             analysis.turns.filter(
               (t) => t.start < point - 0.02 && t.end > point + 0.02,
             ).length *
               100 +
+            (shot.motionBeats || []).filter((b) => {
+              const range = criticalTiming(b);
+              return (
+                range &&
+                range.start < point - 0.001 &&
+                range.end > point + 0.001
+              );
+            }).length *
+              50 +
             (ideal - point);
           end = [...candidates]
             .filter(
@@ -75,6 +98,15 @@ export class ScenePlannerService {
           allowed.find((d) => d >= end - actualStart - 0.001) ?? maximum;
         const id = `${shot.id}_${segments.length}`;
         const warnings: string[] = [];
+        if (
+          (shot.motionBeats || []).some((b) => {
+            const range = criticalTiming(b);
+            return range && range.start < end && range.end > end;
+          })
+        )
+          warnings.push(
+            "A key action's timing bracket crosses this segment boundary. Review both references and preserve the action's continuity.",
+          );
         if (version.strategy === "EXTEND")
           warnings.push(
             "Flow extension requires an eligible generated 8-second Veo clip. Import its continuation, or trim any repeated source portion from a combined download. Confirm the available extension length in Flow.",

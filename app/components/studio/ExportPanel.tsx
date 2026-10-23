@@ -3,6 +3,7 @@ import { Download, Film, Play } from "lucide-react";
 import type { Analysis, Version } from "../../lib/studio/types";
 import { assetUrl, seconds } from "../../lib/studio/types";
 import type { StudioAction } from "./Studio";
+import { reenactmentRange } from "../../lib/studio/range";
 
 export function ExportPanel({
   analysis,
@@ -17,6 +18,7 @@ export function ExportPanel({
   run: StudioAction;
   busy: boolean;
 }) {
+  const range = reenactmentRange(analysis, version);
   const imported = version.segments.filter((s) => version.clips[s.id]).length;
   const ready =
     version.segments.length > 0 &&
@@ -40,8 +42,10 @@ export function ExportPanel({
             <span>clips imported</span>
           </div>
           <div>
-            <strong>{seconds(analysis.media.duration)}</strong>
-            <span>source duration</span>
+            <strong>{seconds(range.end - range.start)}</strong>
+            <span>
+              selected source {seconds(range.start)}–{seconds(range.end)}
+            </span>
           </div>
           <div>
             <strong>{version.audioMode.replace("CHARACTER_", "")}</strong>

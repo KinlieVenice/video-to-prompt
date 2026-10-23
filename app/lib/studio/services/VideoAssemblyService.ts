@@ -11,6 +11,8 @@ import {
 } from "../server/store";
 import { probe, run } from "../server/ffmpeg";
 import { VoiceService } from "./VoiceService";
+import { segmentMotion, segmentOpeningState } from "../motion";
+import { reenactmentRange } from "../range";
 
 export function srtTime(seconds: number) {
   const ms = Math.max(0, Math.round(seconds * 1000));
@@ -21,6 +23,7 @@ export function subtitles(
   version?: Version,
   characters: Character[] = [],
 ) {
+  const range = reenactmentRange(analysis, version);
   const timed = analysis.turns
     .map((turn) => {
       if (!version || version.audioMode === "SILENT") return turn;
@@ -47,6 +50,11 @@ export function subtitles(
         end: Math.min(analysis.media.duration, end),
       };
     })
+    .map((turn) => ({
+      ...turn,
+      start: Math.max(range.start, turn.start) - range.start,
+      end: Math.min(range.end, turn.end) - range.start,
+    }))
     .filter((turn) => turn.end > turn.start);
   return timed
     .sort((a, b) => a.start - b.start)
@@ -94,9 +102,18 @@ export class VideoAssemblyService {
   ) {
     if (!version.segments.length || version.planRevision !== analysis.revision)
       throw new Error("Plan segments again after editing analysis.");
-    const total = analysis.media.duration;
-    let cursor = 0;
+    const range = reenactmentRange(analysis, version);
+    const total = range.end - range.start;
+    let cursor = range.start;
     for (const segment of version.segments) {
+      if (
+        segment.start < range.start - 0.005 ||
+        segment.end > range.end + 0.005 ||
+        segment.end <= segment.start
+      )
+        throw new Error(
+          "Segment plan is outside the reenactment range. Replan segments.",
+        );
       if (Math.abs(segment.start + segment.overlap - cursor) > 0.005)
         throw new Error(
           "Segment plan has a timeline gap or incompatible overlap.",
@@ -105,8 +122,8 @@ export class VideoAssemblyService {
       if (!version.clips[segment.id])
         throw new Error("Import a generated clip for every segment.");
     }
-    if (Math.abs(cursor - total) > 0.005)
-      throw new Error("Segment plan does not cover the source duration.");
+    if (Math.abs(cursor - range.end) > 0.005)
+      throw new Error("Segment plan does not cover the reenactment range.");
     const [width, height] =
       version.aspect === "9:16" ? [720, 1280] : [1280, 720];
     const normalized: string[] = [];
@@ -122,7 +139,7 @@ export class VideoAssemblyService {
         );
       const output = await newAsset("mp4");
       // Round cumulative boundaries, avoiding per-clip rounding drift on long timelines.
-      const nextFrame = Math.round(segment.end * 30),
+      const nextFrame = Math.round((segment.end - range.start) * 30),
         frames = nextFrame - Math.round(outputCursor * 30);
       if (frames < 1)
         throw new Error(
@@ -149,7 +166,7 @@ export class VideoAssemblyService {
         "yuv420p",
         output.path,
       ]);
-      outputCursor = segment.end;
+      outputCursor = segment.end - range.start;
       normalized.push(output.asset);
     }
     const list = await writeAsset(
@@ -182,12 +199,13 @@ export class VideoAssemblyService {
     };
     const offsetFilter = (offset: number) =>
       `atrim=start=${Math.max(0, -offset)},asetpts=PTS-STARTPTS,adelay=${Math.round(Math.max(0, offset) * 1000)}:all=1`;
+    const selectedAudio = `apad,atrim=start=${range.start}:end=${range.end},asetpts=PTS-STARTPTS`;
     let hasAudio = false;
     if (version.audioMode === "ORIGINAL") {
       if (analysis.media.hasAudio) {
         const index = addAudio(analysis.sourceAsset);
         filters.push(
-          `[${index}:a]${offsetFilter(version.audioOffset)},apad,atrim=duration=${total}[audio]`,
+          `[${index}:a]${offsetFilter(version.audioOffset)},${selectedAudio}[audio]`,
         );
         hasAudio = true;
       }
@@ -196,7 +214,7 @@ export class VideoAssemblyService {
         throw new Error("Upload an audio recording first.");
       const index = addAudio(version.uploadedAudio);
       filters.push(
-        `[${index}:a]${offsetFilter(version.audioOffset)},apad,atrim=duration=${total}[audio]`,
+        `[${index}:a]${offsetFilter(version.audioOffset)},${selectedAudio}[audio]`,
       );
       hasAudio = true;
     } else if (version.audioMode === "CHARACTER_TTS") {
@@ -205,26 +223,30 @@ export class VideoAssemblyService {
         const character = characters.find(
           (c) => c.id === version.mappings[turn.speakerId],
         );
-        if (!character)
-          throw new Error(
-            "Map every speaking actor before assembling character audio.",
-          );
         const takes = version.audioTakes[turn.id] || [];
         const take =
           takes.find((t) => t.asset === version.selectedTakes[turn.id]) ||
           takes.at(-1);
+        const timing = version.turnTiming[turn.id] || { offset: 0, speed: 1 };
+        const speed = timing.speed * (character?.voice.speed || 1);
+        const start = turn.start + timing.offset + version.audioOffset;
+        const expectedEnd = take
+          ? start + take.duration / speed
+          : turn.end + timing.offset + version.audioOffset;
+        if (start >= range.end || expectedEnd <= range.start) continue;
+        if (!character)
+          throw new Error(
+            "Map every speaking actor before assembling character audio.",
+          );
         if (!take || take.signature !== VoiceService.key(turn, character.voice))
           throw new Error(
             "Generate current audio for every line. A line or saved voice has changed.",
           );
-        const timing = version.turnTiming[turn.id] || { offset: 0, speed: 1 };
-        const speed = timing.speed * character.voice.speed;
-        const start = turn.start + timing.offset + version.audioOffset;
         const length = take.duration / speed;
         if (
           start < 0 ||
           start + length > turn.end + 0.04 ||
-          start + length > total + 0.04
+          start + length > analysis.media.duration + 0.04
         )
           throw new Error(
             `Dialogue exceeds its allocated duration: ${turn.text.slice(0, 70)}. Adjust timing or speed without changing its words.`,
@@ -245,17 +267,17 @@ export class VideoAssemblyService {
       }
       if (labels.length) {
         filters.push(
-          `${labels.join("")}amix=inputs=${labels.length}:normalize=0,alimiter=limit=0.95,apad,atrim=duration=${total}[audio]`,
+          `${labels.join("")}amix=inputs=${labels.length}:normalize=0,alimiter=limit=0.95,${selectedAudio}[audio]`,
         );
         hasAudio = true;
       }
     }
     let subtitleIndex: number | undefined;
-    if (version.subtitles && analysis.turns.length) {
-      const asset = await writeAsset(
-        subtitles(analysis, version, characters),
-        "srt",
-      );
+    const captions = version.subtitles
+      ? subtitles(analysis, version, characters)
+      : "";
+    if (captions) {
+      const asset = await writeAsset(captions, "srt");
       subtitleIndex = audioIndex++;
       inputs.push("-i", assetPath(asset));
     }
@@ -317,11 +339,23 @@ export class VideoAssemblyService {
       project: project.name,
       version: version.name,
       source: { name: analysis.sourceName, duration: analysis.media.duration },
+      sourceRange: reenactmentRange(analysis, version),
       audioMode: version.audioMode,
       target: version.target,
       segments: version.segments.map((segment) => ({
         ...segment,
         prompt: prompts[segment.id],
+        motionPlan: segmentMotion(
+          analysis.shots.find((s) => s.id === segment.shotId)!,
+          segment,
+        ),
+        incomingState: segmentOpeningState(
+          analysis.shots.find((s) => s.id === segment.shotId)!,
+          segment.start,
+        ),
+        motionEvidence: (
+          analysis.shots.find((s) => s.id === segment.shotId)?.motionBeats || []
+        ).filter((b) => b.start < segment.end && b.end >= segment.start),
         dialogue: analysis.turns.filter(
           (t) => t.end > segment.start && t.start < segment.end,
         ),
@@ -368,10 +402,17 @@ export class VideoAssemblyService {
           assets.add(frame.generated.first);
           assets.add(frame.generated.last);
         }
+        for (const moment of frame.moments || []) assets.add(moment.asset);
       }
     }
     for (const character of manifest.characters)
       for (const reference of character.references) assets.add(reference);
+    for (const segment of manifest.segments)
+      for (const beat of segment.motionEvidence)
+        if (beat.evidence) {
+          assets.add(beat.evidence.before.asset);
+          assets.add(beat.evidence.after.asset);
+        }
     for (const asset of assets) files[asset] = await readFile(assetPath(asset));
     return writeAsset(Buffer.from(zipSync(files, { level: 0 })), "zip");
   }

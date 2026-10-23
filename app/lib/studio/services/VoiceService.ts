@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { AudioTake, Character, Turn, VoiceProfile } from "../types";
-import { speechInput, TTS_MODELS } from "../types";
+import { speechInput } from "../types";
 import {
   assetExists,
   assetPath,
@@ -10,7 +10,8 @@ import {
   signature,
   writeAsset,
 } from "../server/store";
-import { blocks, googleRequest, type Interaction } from "../server/google";
+import type { RouterConnection } from "../connection";
+import { routerBaseUrl, routerRequest } from "../server/openai";
 import { probe, run } from "../server/ffmpeg";
 
 export class VoiceService {
@@ -21,15 +22,22 @@ export class VoiceService {
   static async generate(
     turn: Turn,
     character: Character,
-    apiKey: string,
+    connection: RouterConnection,
     regenerate = false,
   ): Promise<AudioTake> {
     const voice = character.voice;
-    if (!TTS_MODELS.includes(voice.model))
-      throw new Error("Choose a supported Gemini TTS model.");
+    if (voice.provider !== "OPENAI")
+      throw new Error(
+        "This saved voice belongs to Gemini. Select an OpenAI voice in the character editor; existing audio remains reusable.",
+      );
+    if (!connection.ttsEnabled)
+      throw new Error(
+        "Enable the optional speech route in Settings after configuring a TTS provider in 9router. ORIGINAL audio needs no TTS.",
+      );
     if (!turn.text.trim()) throw new Error("This turn has no dialogue.");
     const key = this.key(turn, voice);
-    const cached = await cacheGet<AudioTake>(`tts-${key}`);
+    const cacheId = `tts-router-${signature({ key, route: routerBaseUrl(connection.baseUrl) })}`;
+    const cached = await cacheGet<AudioTake>(cacheId);
     if (!regenerate && cached && (await assetExists(cached.asset)))
       return {
         asset: cached.asset,
@@ -44,44 +52,44 @@ export class VoiceService {
         : voice.language === "en-US"
           ? "English; preserve any Filipino code-switching"
           : "Match the transcript language, including Filipino, English and Taglish";
-    const response = await googleRequest<Interaction>("interactions", apiKey, {
-      model: voice.model,
-      store: false,
-      input: [
-        {
-          type: "user_input",
-          content: [
-            {
-              type: "text",
-              text: turn.text,
-              annotations: [
-                {
-                  type: "speech_metadata",
-                  style: [voice.style, turn.emotion, language]
-                    .filter(Boolean)
-                    .join(". "),
-                },
-              ],
-            },
-          ],
-        },
-      ],
-      response_format: { type: "audio" },
-      generation_config: { speech_config: [{ voice: voice.voiceId }] },
+    const instructions = [
+      "Speak the input verbatim without translation or censorship.",
+      voice.style,
+      turn.emotion,
+      language,
+    ]
+      .filter(Boolean)
+      .join(". ");
+    const response = await routerRequest(connection, "audio/speech", {
+      model: `${voice.model}/${voice.voiceId}`,
+      voice: voice.voiceId,
+      input: turn.text,
+      instructions,
+      style: instructions,
+      language: voice.language === "auto" ? "" : voice.language,
+      response_format: "wav",
     });
-    const audio = blocks(response)
-      .filter((b) => b.type === "audio" && b.data)
-      .at(-1);
-    if (!audio?.data)
+    const mime = response.headers.get("content-type") || "";
+    if (!mime.startsWith("audio/") && mime !== "application/octet-stream")
       throw new Error(
-        "Gemini returned no audio. The provider may have rejected this line.",
+        "9router returned no binary speech audio. Check its TTS route.",
       );
-    const mime = audio.mime_type || "audio/wav";
-    if (!mime.includes("wav"))
-      throw new Error(
-        `Expected WAV from Gemini TTS, received ${mime}. No malformed audio was saved.`,
-      );
-    const asset = await writeAsset(Buffer.from(audio.data, "base64"), "wav");
+    // 9router may return MP3 even when WAV was requested. Normalize actual audio with FFmpeg.
+    const raw = await writeAsset(
+      Buffer.from(await response.arrayBuffer()),
+      mime.includes("wav") ? "wav" : "mp3",
+    );
+    const wav = await newAsset("wav");
+    await run("ffmpeg", [
+      "-y",
+      "-i",
+      assetPath(raw),
+      "-vn",
+      "-c:a",
+      "pcm_s16le",
+      wav.path,
+    ]);
+    const asset = wav.asset;
     const media = await probe(assetPath(asset));
     const take: AudioTake = {
       asset,
@@ -90,48 +98,13 @@ export class VoiceService {
       createdAt: new Date().toISOString(),
       inputFingerprint: JSON.stringify(speechInput(turn, voice)),
     };
-    await saveRecord("cache", { id: `tts-${key}`, ...take });
+    await saveRecord("cache", { id: cacheId, ...take });
     return take;
   }
-  static async design(
-    character: Character,
-    apiKey: string,
-  ): Promise<Character> {
-    if (!character.voice.designPrompt.trim())
-      throw new Error("Describe the voice before designing it.");
-    const response = await googleRequest<{
-      id?: string;
-      sample_audio?: { data?: string; mime_type?: string };
-    }>("voices", apiKey, {
-      store: true,
-      voice: {
-        model: character.voice.model,
-        type: "prompted",
-        display_name: character.name,
-        language_code:
-          character.voice.language === "auto"
-            ? "fil-PH"
-            : character.voice.language,
-        prompted: { input: character.voice.designPrompt },
-      },
-    });
-    if (!response.id)
-      throw new Error("Voice design returned no persistent voice ID.");
-    const previewAsset = response.sample_audio?.data
-      ? await writeAsset(
-          Buffer.from(response.sample_audio.data, "base64"),
-          "wav",
-        )
-      : undefined;
-    return {
-      ...character,
-      voice: {
-        ...character.voice,
-        kind: "DESIGNED",
-        voiceId: response.id,
-        previewAsset,
-      },
-    };
+  static async design(): Promise<Character> {
+    throw new Error(
+      "Voice design is not supported by the 9router speech adapter. Save a supported prebuilt voice instead.",
+    );
   }
   static async extractOriginal(sourceAsset: string) {
     const key = `original-${signature(sourceAsset)}`;

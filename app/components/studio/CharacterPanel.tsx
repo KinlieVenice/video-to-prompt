@@ -7,7 +7,6 @@ import {
   Plus,
   Upload,
   Volume2,
-  WandSparkles,
   X,
 } from "lucide-react";
 import type { Analysis, Character, Version } from "../../lib/studio/types";
@@ -290,36 +289,40 @@ export function CharacterPanel({
             <div className="two-cols">
               <label>
                 TTS provider
-                <input readOnly value="Google Gemini" />
+                <input
+                  readOnly
+                  value={
+                    draft.voice.provider === "GEMINI"
+                      ? "Gemini (saved legacy profile)"
+                      : "OpenAI through 9router"
+                  }
+                />
               </label>
               <label>
                 TTS model
-                <select
+                <input
+                  list="tts-models"
                   value={draft.voice.model}
                   onChange={(e) => voice({ model: e.target.value })}
-                >
+                />
+                <datalist id="tts-models">
                   {TTS_MODELS.map((m) => (
-                    <option value={m} key={m}>
-                      {m.includes("lite")
-                        ? "Flash-Lite TTS · lower cost"
-                        : "Flash TTS · expressive"}
-                    </option>
+                    <option key={m} value={m} />
                   ))}
-                </select>
+                </datalist>
               </label>
             </div>
             <div className="two-cols">
               <label>
                 Voice type
-                <select
-                  value={draft.voice.kind}
-                  onChange={(e) =>
-                    voice({ kind: e.target.value as "PREBUILT" | "DESIGNED" })
+                <input
+                  readOnly
+                  value={
+                    draft.voice.kind === "DESIGNED"
+                      ? "Saved designed voice (legacy)"
+                      : "Prebuilt voice"
                   }
-                >
-                  <option value="PREBUILT">Prebuilt</option>
-                  <option value="DESIGNED">Designed voice</option>
-                </select>
+                />
               </label>
               <label>
                 Voice ID
@@ -330,11 +333,12 @@ export function CharacterPanel({
                   list="prebuilt-voices"
                 />
                 <datalist id="prebuilt-voices">
-                  <option value="Kore" />
-                  <option value="Puck" />
-                  <option value="Aoede" />
-                  <option value="Charon" />
-                  <option value="Fenrir" />
+                  <option value="alloy" />
+                  <option value="ash" />
+                  <option value="coral" />
+                  <option value="echo" />
+                  <option value="nova" />
+                  <option value="shimmer" />
                 </datalist>
               </label>
             </div>
@@ -377,30 +381,23 @@ export function CharacterPanel({
                 onChange={(e) => voice({ style: e.target.value })}
               />
             </label>
-            {draft.voice.kind === "DESIGNED" && (
-              <>
-                <label>
-                  Voice design description
-                  <textarea
-                    value={draft.voice.designPrompt}
-                    rows={2}
-                    placeholder="Describe vocal character, timbre, accent and baseline delivery…"
-                    onChange={(e) => voice({ designPrompt: e.target.value })}
-                  />
-                </label>
+            {draft.voice.provider === "GEMINI" && (
+              <div className="notice">
+                This profile retains its saved Gemini voice and audio. To
+                generate new speech on this branch, select a new OpenAI voice.
                 <button
                   className="button"
-                  disabled={busy || !draft.name.trim()}
-                  onClick={() => voiceAction("design_voice")}
+                  onClick={() => patch({ voice: defaultVoice() })}
                 >
-                  <WandSparkles size={15} />
-                  Design & save voice · API charge
+                  Use an OpenAI voice
                 </button>
-                <span className="hint">
-                  You can also paste a designed voice ID from Google AI Studio.
-                </span>
-              </>
+              </div>
             )}
+            <p className="hint">
+              Optional TTS requires a speech provider configured in 9router.
+              Delivery instructions may be ignored by its adapter; preview each
+              line. Voice design is unavailable on this route.
+            </p>
             <label>
               Preview script
               <input
