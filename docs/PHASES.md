@@ -1,0 +1,15 @@
+# Delivered phases and verification
+
+Each phase is accessible in the same working application, backed by modular services and persistent local files.
+
+| Phase                      | Working result                                                                                                                                                     | Verification                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| 1 — Analysis and mapping   | MP4/MOV upload, FFmpeg cuts/audio activity, Gemini visual+audio passes, timeline/transcript correction, actor mapping, independent character library and versions  | Real synthetic video: two cuts, source correction, character mapping, unchanged analysis revision, duplicated version          |
+| 2 — Audio and saved voices | ORIGINAL default; CHARACTER_TTS, UPLOADED, SILENT; prebuilt/designed voices, previews, exact lines, style metadata, saved takes and timing controls                | Mock provider validates verbatim Taglish/profanity; real WAV probing, cache reuse, regeneration, stale voice checks            |
+| 3 — Keyframes and prompts  | Source first/last extraction, replacement image adapter, supported Flow targets/strategies, segment planning, credits, downloadable ZIP                            | Real extracted images; mocked replacement adapter; cut/coverage/overlap invariants across durations; character-agnostic prompt |
+| 4 — Import and assembly    | Generated clip import/trim, FFmpeg validation/concat/audio, subtitles, disclosure, landscape/portrait MP4, preview                                                 | Real FFmpeg exports for all four audio modes, duration/resolution/audio validation, overflow and missing-clip rejection        |
+| 5 — Quality and cost       | Source/transcript/visual/audio/image caches, partial image reuse, no repeated character analysis, local endpoint boundaries, media byte ranges, separate cost docs | Persisted state excludes keys; seeking/traversal and cross-origin checks; browser upload-to-playable-export test               |
+
+Run `npm test`, `npm run test:e2e`, `npm run typecheck`, and `npm run build`. Browser tests use `.tmp/` data, never the user's `.studio/` projects. They use generated synthetic media and no paid APIs.
+
+Live Gemini access, human transcription accuracy, voice consistency, image identity fidelity and manual Flow output quality depend on the user account/source material and must be evaluated with a real API key. No paid credentials were supplied or used during implementation. Automatic background source separation, phoneme-level forced alignment, automatic lip-sync correction and built-in 2D rig animation remain optional external integrations.

@@ -33,11 +33,32 @@ export function ApiKeyDialog({
 
   useEffect(() => {
     if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const first = dialogRef.current?.querySelector<HTMLInputElement>("input");
+    first?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      if (e.key === "Tab") {
+        const items = dialogRef.current?.querySelectorAll<HTMLElement>(
+          "button,input,select,a[href]",
+        );
+        if (!items?.length) return;
+        const first = items[0],
+          last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      previous?.focus();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -51,13 +72,19 @@ export function ApiKeyDialog({
     >
       <div
         ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
         className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-6 shadow-xl"
       >
         <div className="mb-5 flex items-start justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Settings</h2>
+            <h2 id="settings-title" className="text-lg font-semibold">
+              Settings
+            </h2>
             <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-              Your API key is stored locally in your browser only.
+              Your key is saved in this browser and sent to the local server for
+              Gemini requests. It is never written to project files.
             </p>
           </div>
           <button
@@ -72,7 +99,10 @@ export function ApiKeyDialog({
 
         <div className="space-y-4">
           <div>
-            <label htmlFor="api-key" className="mb-1.5 block text-sm font-medium">
+            <label
+              htmlFor="api-key"
+              className="mb-1.5 block text-sm font-medium"
+            >
               Gemini API Key
             </label>
             <div className="relative">
@@ -99,7 +129,7 @@ export function ApiKeyDialog({
               rel="noopener noreferrer"
               className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--muted-foreground)] transition hover:text-[var(--accent)]"
             >
-              Get a free Gemini API key from Google AI Studio
+              Get a Gemini API key from Google AI Studio (API charges may apply)
               <ExternalLink size={12} />
             </a>
           </div>

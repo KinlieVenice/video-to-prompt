@@ -1,5 +1,5 @@
-import { VideoToPromptApp } from "./components/VideoToPromptApp";
+import { Studio } from "./components/studio/Studio";
 
 export default function Home() {
-  return <VideoToPromptApp />;
+  return <Studio />;
 }
