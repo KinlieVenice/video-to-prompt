@@ -16,6 +16,7 @@ export class PromptGenerationService {
     version: Version,
     segment: Segment,
     characters: Character[],
+    flow?: { resolution: "360p" | "720p"; nativeVoice: boolean },
   ): string {
     const shot = analysis.shots.find((s) => s.id === segment.shotId)!;
     const turns = analysis.turns.filter(
@@ -37,7 +38,7 @@ export class PromptGenerationService {
       return `${Math.max(0, t.start - segment.start).toFixed(2)}–${Math.min(segment.end - segment.start, t.end - segment.start).toFixed(2)}s, ${speaker}, ${t.emotion || "natural"}: ${JSON.stringify(t.text)}. ${t.gesture}`;
     });
     return [
-      `Create ${segment.duration} seconds, ${version.aspect}. Target: ${version.target === "VEO_LITE" ? "Google Flow Veo 3.1 Lite" : "Google Flow Gemini Omni Flash (720p)"}. Strategy: ${STRATEGIES[segment.strategy]}.`,
+      `Create ${segment.duration} seconds, ${version.aspect}. Target: ${version.target === "VEO_LITE" ? "Google Flow Veo 3.1 Lite" : `Google Flow Gemini Omni Flash (${flow?.resolution || "720p"})`}. Strategy: ${STRATEGIES[segment.strategy]}.`,
       `Reenact source interval ${segment.start.toFixed(3)}–${segment.end.toFixed(3)}s as one continuous camera shot. Preserve composition, relevant clothing, blocking, choreography, action props, source rhythm and camera angle.`,
       ...cast,
       direction.backgroundMode === "NEW"
@@ -61,11 +62,13 @@ export class PromptGenerationService {
             : `Continue the same camera shot after segment ${previous.id}. Keep its outgoing pose, hands/limbs, prop positions and object damage/condition. Use the shared boundary frame as this segment's first frame. Do not reset to setup, repair damaged props or replay the prior reaction.`
           : "Begin a new shot from its attached reference. Do not continue across a camera cut.",
       `Dialogue (verbatim; preserve Filipino, English, Taglish and profanity):\n${dialogue.join("\n") || "No dialogue in this interval."}`,
-      version.audioMode === "SILENT"
-        ? "Generate a silent performance."
-        : turns.length
-          ? "Use dialogue timing to guide mouth movement and emotion. Final audio will be applied separately in the assembler; do not change words or timing."
-          : "No spoken dialogue is supplied. Match only visible mouth expressions; final soundtrack will be applied separately.",
+      flow?.nativeVoice
+        ? "Use the attached Flow voice for the supplied verbatim dialogue, matching its timestamps and performance. Do not add or rewrite words."
+        : version.audioMode === "SILENT"
+          ? "Generate a silent performance."
+          : turns.length
+            ? "Use dialogue timing to guide mouth movement and emotion. Final audio will be applied separately in the assembler; do not change words or timing."
+            : "No spoken dialogue is supplied. Match only visible mouth expressions; final soundtrack will be applied separately.",
       segment.strategy === "FIRST_LAST"
         ? "Use the attached replaced first and last frames as exact composition endpoints."
         : "Use the attached character and frame references to maintain identity and composition.",

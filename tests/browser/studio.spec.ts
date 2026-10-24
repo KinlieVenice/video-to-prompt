@@ -1,10 +1,182 @@
 import { test, expect } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { defaultVoice, newVersion } from "../../app/lib/studio/types";
 import { run } from "../../app/lib/studio/server/ffmpeg";
+import type { FlowJob } from "../../app/lib/studio/flow";
+
+test("Flow workspace prepares and reviews a quote before one submission, then imports the result", async ({
+  page,
+}) => {
+  const version = newVersion(randomUUID());
+  version.target = "OMNI_FLASH";
+  version.planRevision = 1;
+  version.segments = [
+    {
+      id: "segment",
+      shotId: "shot",
+      start: 0,
+      end: 4,
+      duration: 4,
+      overlap: 0,
+      strategy: "FIRST_LAST",
+      credits: 7,
+      warnings: [],
+    },
+  ];
+  const first = `${randomUUID()}.png`,
+    last = `${randomUUID()}.png`,
+    clip = `${randomUUID()}.mp4`;
+  version.frames.segment = {
+    first,
+    last,
+    generated: { first, last, signature: "references" },
+  };
+  const project = {
+    id: randomUUID(),
+    name: "Bridge test",
+    analysisId: "analysis",
+    versions: [version],
+    updatedAt: "now",
+  };
+  const snapshot = {
+    projects: [project],
+    analyses: [
+      {
+        id: "analysis",
+        sourceAsset: clip,
+        sourceName: "test.mp4",
+        sourceHash: "source",
+        media: {
+          duration: 4,
+          width: 360,
+          height: 640,
+          fps: 24,
+          hasAudio: true,
+        },
+        shots: [
+          {
+            id: "shot",
+            start: 0,
+            end: 4,
+            description: "A test performance",
+            motion: "Wave once",
+            camera: "Fixed",
+            lighting: "Even",
+          },
+        ],
+        speakers: [],
+        turns: [],
+        activity: [],
+        status: "ANALYZED",
+        revision: 1,
+        warnings: [],
+        createdAt: "now",
+      },
+    ],
+    characters: [],
+    ffmpegReady: true,
+  };
+  let job: FlowJob | undefined,
+    submissions = 0;
+  await page.route("**/api/studio", (route) =>
+    route.fulfill({ json: snapshot }),
+  );
+  await page.route("**/api/studio/flow*", async (route) => {
+    if (route.request().method() === "GET")
+      return route.fulfill({
+        json: {
+          jobs: job ? [job] : [],
+          connection: {
+            connected: true,
+            signedIn: true,
+            message: "Test Flow connection",
+          },
+        },
+      });
+    const body = route.request().postDataJSON();
+    if (body.action === "prepare")
+      job = {
+        id: randomUUID(),
+        state: "PREPARED",
+        createdAt: "now",
+        updatedAt: "now",
+        fingerprint: "input",
+        quote: 4,
+        draftSignature: "draft",
+        projectUrl:
+          "https://flow.google.com/project/11111111-1111-1111-1111-111111111111",
+        binding: {
+          projectId: project.id,
+          versionId: version.id,
+          segmentId: "segment",
+          signature: "current",
+        },
+        input: {
+          prompt: "Preserve the performance",
+          model: "OMNI_FLASH",
+          mode: "FIRST_LAST",
+          duration: 4,
+          aspect: "16:9",
+          first,
+          last,
+          references: [],
+          settings: body.settings,
+        },
+      };
+    if (body.action === "submit") {
+      expect(body.maxCredits).toBe(4);
+      submissions++;
+      job!.state = "RUNNING";
+    }
+    if (body.action === "refresh") job!.state = "COMPLETE";
+    if (body.action === "download") job!.asset = clip;
+    if (body.action === "import")
+      version.clips.segment = {
+        asset: clip,
+        trim: 0,
+        media: {
+          duration: 4,
+          width: 360,
+          height: 640,
+          fps: 24,
+          hasAudio: true,
+        },
+      };
+    await route.fulfill({ json: { job } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /Flow workspace/ }).click();
+  const bridge = page.getByRole("region", { name: "Local Flow bridge" });
+  await expect(
+    bridge.getByRole("button", { name: /Generate one clip/ }),
+  ).toHaveCount(0);
+  await bridge
+    .getByRole("button", { name: /Prepare selected segment/ })
+    .click();
+  const generate = bridge.getByRole("button", {
+    name: "Generate one clip · 4 credits",
+    exact: true,
+  });
+  await expect(generate).toBeVisible();
+  expect(submissions).toBe(0);
+  await generate.click();
+  await expect(generate).toHaveCount(0);
+  expect(submissions).toBe(1);
+  await bridge
+    .getByRole("button", { name: "Refresh status", exact: true })
+    .click();
+  await bridge
+    .getByRole("button", { name: "Download original result", exact: true })
+    .click();
+  await bridge
+    .getByRole("button", { name: "Use original in this segment", exact: true })
+    .click();
+  await expect.poll(() => version.clips.segment?.asset).toBe(clip);
+  expect(submissions).toBe(1);
+});
 
 test("environment router settings appear without exposing the server key", async ({
   page,
@@ -264,6 +436,68 @@ test("local studio: upload, corrections, reusable cast, Flow import and playable
     4,
     1,
   );
+  const firstExport = await video.getAttribute("src");
+  await page
+    .getByRole("button", { name: /Flow workspace Generate shot by shot/ })
+    .click();
+  const firstSegment = segments.nth(0);
+  const firstClip = await firstSegment
+    .locator(".imported-preview video")
+    .getAttribute("src");
+  await expect(firstSegment.locator(".imported-preview")).toContainText(
+    "Only 2.00s",
+  );
+  const shortReplacement = path.resolve(".tmp/e2e-short-replacement.mp4");
+  await run("ffmpeg", [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=blue:s=320x180:r=30:d=1",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    shortReplacement,
+  ]);
+  await page
+    .getByLabel("Upload clip for segment 1", { exact: true })
+    .setInputFiles({
+      name: "replacement-take.mp4",
+      mimeType: "video/mp4",
+      buffer: await readFile(shortReplacement),
+    });
+  await expect(
+    firstSegment.locator(".imported-preview video"),
+  ).not.toHaveAttribute("src", firstClip!);
+  await expect(firstSegment.locator(".imported-preview")).toContainText(
+    "Assigned file: replacement-take.mp4",
+  );
+  await expect(firstSegment.locator(".imported-preview")).toContainText(
+    "Export uses 0.00s–1.00s",
+  );
+  await expect(firstSegment.locator(".imported-preview")).toContainText(
+    "hold for 1.00s",
+  );
+  await page
+    .getByRole("button", { name: /Assemble & export Make the final cut/ })
+    .click();
+  await expect(
+    page.getByRole("link", { name: "Download MP4", exact: true }),
+  ).toHaveCount(0);
+  await page.getByText("Clips used in this export", { exact: true }).click();
+  await expect(page.getByText(/replacement-take.mp4 · use/)).toBeVisible();
+  await page
+    .getByLabel("Assembly timing", { exact: true })
+    .selectOption("EDITED_CLIPS");
+  await expect(page.getByText(/e2e-fixture.mp4 · use/)).toContainText(
+    "0.00s–3.00s",
+  );
+  await page
+    .getByRole("button", { name: "Assemble final MP4", exact: true })
+    .click();
+  await expect(video).toBeVisible({ timeout: 45000 });
+  await expect(video).not.toHaveAttribute("src", firstExport!);
   await page.reload();
   await page
     .getByRole("button", { name: /Assemble & export Make the final cut/ })
@@ -271,6 +505,9 @@ test("local studio: upload, corrections, reusable cast, Flow import and playable
   await expect(
     page.getByRole("link", { name: "Download MP4", exact: true }),
   ).toBeVisible();
+  await expect(page.getByLabel("Assembly timing", { exact: true })).toHaveValue(
+    "EDITED_CLIPS",
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: ".tmp/studio-mobile.png", fullPage: true });
   expect(
@@ -644,12 +881,14 @@ test("motion analysis can be refined and reviewed without losing manual beat cor
     "yuv420p",
     fixture,
   ]);
+  const analysisPrompts: string[] = [];
   const router = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const content = JSON.parse(Buffer.concat(chunks).toString()).messages[0]
       .content;
     const prompt = content[0].text as string;
+    analysisPrompts.push(prompt);
     const start = Number(prompt.match(/Source interval ([\d.]+)-/)?.[1] || 0);
     const refined = prompt.includes("REFINEMENT PASS");
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -706,12 +945,38 @@ test("motion analysis can be refined and reviewed without losing manual beat cor
     );
     await page.goto("/");
     await page.locator('input.hidden[type="file"]').setInputFiles(fixture);
+    const description = page.getByLabel(/What.s happening in this video/);
+    await description.fill(
+      "A tabletop object changes position during this visual meme.",
+    );
+    await page
+      .getByRole("button", { name: "Save source description", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", {
+        name: "Save source description",
+        exact: true,
+      }),
+    ).toBeDisabled();
+    expect(analysisPrompts).toHaveLength(0);
+    await page.reload();
+    await expect(description).toHaveValue(
+      "A tabletop object changes position during this visual meme.",
+    );
     await page
       .getByRole("button", { name: "Analyze with OpenAI", exact: true })
       .click();
     await expect(
       page.getByRole("button", { name: "Refine motion timing", exact: true }),
     ).toBeVisible({ timeout: 45000 });
+    expect(analysisPrompts.length).toBeGreaterThan(0);
+    expect(
+      analysisPrompts.every((prompt) =>
+        prompt.includes(
+          "A tabletop object changes position during this visual meme.",
+        ),
+      ),
+    ).toBe(true);
     await page
       .getByText("Edit shot boundaries, motion and camera", { exact: true })
       .click();
@@ -768,6 +1033,30 @@ test("motion analysis can be refined and reviewed without losing manual beat cor
     await expect(
       page.getByLabel("Timing reviewed against source", { exact: true }),
     ).toBeChecked();
+    await description.fill(
+      "The object moves briefly, then stays in its new position.",
+    );
+    await page
+      .getByRole("button", {
+        name: "Update analysis with description",
+        exact: true,
+      })
+      .click();
+    await expect(
+      page.getByRole("button", {
+        name: "Analysis saved for reuse",
+        exact: true,
+      }),
+    ).toBeVisible({ timeout: 45000 });
+    expect(analysisPrompts.at(-1)).toContain(
+      "The object moves briefly, then stays in its new position.",
+    );
+    await page
+      .getByText("Edit shot boundaries, motion and camera", { exact: true })
+      .click();
+    await expect(
+      page.getByLabel("Motion action 1", { exact: true }),
+    ).toHaveValue("Human verified object movement");
   } finally {
     router.closeAllConnections();
     await new Promise<void>((resolve) => router.close(() => resolve()));

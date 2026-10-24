@@ -1,4 +1,5 @@
-export type AudioMode = "ORIGINAL" | "CHARACTER_TTS" | "UPLOADED" | "SILENT";
+export type AudioMode =
+  "ORIGINAL" | "CHARACTER_TTS" | "UPLOADED" | "SILENT" | "FLOW_CLIPS";
 export type Strategy =
   "FRAMES" | "FIRST_LAST" | "INGREDIENTS" | "EXTEND" | "ANIMATION_2D";
 export type Target = "VEO_LITE" | "OMNI_FLASH";
@@ -75,6 +76,8 @@ export type Analysis = {
   sourceAsset: string;
   sourceName: string;
   sourceHash: string;
+  sourceContext?: string;
+  analyzedSourceContext?: string;
   media: MediaInfo;
   shots: Shot[];
   speakers: Speaker[];
@@ -136,7 +139,13 @@ export type Frames = {
     inheritedFrom?: { segmentId: string; signature: string; asset: string };
   };
 };
-export type ImportedClip = { asset: string; media: MediaInfo; trim: number };
+export type ImportedClip = {
+  asset: string;
+  media: MediaInfo;
+  trim: number;
+  sourceName?: string;
+  importedAt?: string;
+};
 export type VisualDirection = {
   backgroundMode: "SOURCE" | "NEW";
   backgroundPrompt: string;
@@ -148,6 +157,7 @@ export type Version = {
   name: string;
   sourceRange?: Interval;
   visualDirection?: VisualDirection;
+  flowSettings?: import("./flow").FlowSettings;
   mappings: Record<string, string>;
   appearanceNotes?: Record<string, string>;
   audioMode: AudioMode;
@@ -168,6 +178,7 @@ export type Version = {
   frames: Record<string, Frames>;
   clips: Record<string, ImportedClip>;
   aspect: "9:16" | "16:9";
+  assemblyTiming?: "SOURCE" | "EDITED_CLIPS";
   subtitles: boolean;
   disclosure: boolean;
   exportAsset?: string;

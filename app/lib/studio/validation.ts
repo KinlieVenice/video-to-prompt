@@ -1,7 +1,9 @@
 import { z } from "zod";
+import { flowSettingsSchema } from "./flow";
 const text = z.string().max(20_000);
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/);
 const time = z.number().finite().min(0).max(86_400);
+export const sourceContextSchema = z.string().trim().max(4000);
 const range = { start: time, end: time };
 const imageAsset = z.string().regex(/^[a-f0-9-]{36}\.(jpg|png)$/);
 export const continuityStateSchema = z.object({
@@ -104,6 +106,7 @@ export const characterSchema = z.object({
   updatedAt: z.string(),
 });
 export const versionEditSchema = z.object({
+  flowSettings: flowSettingsSchema.optional(),
   name: z.string().trim().min(1).max(200),
   sourceRange: z.object(range).optional(),
   visualDirection: z
@@ -129,7 +132,13 @@ export const versionEditSchema = z.object({
       message: "Maximum 200 actor appearance notes per version.",
     })
     .optional(),
-  audioMode: z.enum(["ORIGINAL", "CHARACTER_TTS", "UPLOADED", "SILENT"]),
+  audioMode: z.enum([
+    "ORIGINAL",
+    "CHARACTER_TTS",
+    "UPLOADED",
+    "SILENT",
+    "FLOW_CLIPS",
+  ]),
   audioOffset: z.number().min(-600).max(600),
   target: z.enum(["VEO_LITE", "OMNI_FLASH"]),
   maxDuration: z.union([
@@ -149,6 +158,7 @@ export const versionEditSchema = z.object({
   ultra: z.boolean(),
   creditOverride: z.number().min(0).max(10000).optional(),
   aspect: z.enum(["9:16", "16:9"]),
+  assemblyTiming: z.enum(["SOURCE", "EDITED_CLIPS"]).optional(),
   subtitles: z.boolean(),
   disclosure: z.boolean(),
   turnTiming: z.record(

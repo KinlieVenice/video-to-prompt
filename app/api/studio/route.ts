@@ -23,6 +23,7 @@ import { routerModels } from "../../lib/studio/server/openai";
 import {
   analysisEditSchema,
   characterSchema,
+  sourceContextSchema,
   validateTimeline,
   versionEditSchema,
 } from "../../lib/studio/validation";
@@ -61,6 +62,7 @@ const payloadSchema = z.object({
   value: z.unknown().optional(),
   regenerate: z.boolean().optional(),
   name: z.string().max(200).optional(),
+  sourceContext: sourceContextSchema.optional(),
   role: z.enum(["uploadedAudio", "backgroundAudio"]).optional(),
 });
 function fail(error: unknown) {
@@ -200,11 +202,26 @@ export async function POST(request: Request) {
           result = { projectId: project.id };
           break;
         }
+        case "save_source_context": {
+          const ctx = needVersion();
+          await saveRecord("analyses", {
+            ...ctx.analysis,
+            sourceContext: sourceContextSchema.parse(p.value),
+          });
+          break;
+        }
         case "analyze":
         case "refine_motion": {
           const ctx = needVersion();
+          const input =
+            p.sourceContext === undefined
+              ? ctx.analysis
+              : await saveRecord("analyses", {
+                  ...ctx.analysis,
+                  sourceContext: p.sourceContext,
+                });
           const updated = await VideoAnalysisService.analyze(
-            ctx.analysis,
+            input,
             resolveRouterConnection(p.connection),
             action === "refine_motion",
           );
@@ -547,16 +564,19 @@ export async function POST(request: Request) {
           const uploaded = await upload(["mp4", "mov"]);
           const media = await probe(assetPath(uploaded.asset));
           if (!media.width) throw new Error("Clip has no video stream.");
-          if (media.duration < ctx.segment.end - ctx.segment.start - 0.035)
+          if (media.duration <= ctx.segment.overlap + 0.001)
             throw new Error(
-              "Generated clip is shorter than the source interval.",
+              "Clip ends before the planned overlap. Upload a longer clip or reduce the overlap.",
             );
           ctx.version.clips[ctx.segment.id] = {
             asset: uploaded.asset,
             media,
             trim: 0,
+            sourceName: uploaded.name,
+            importedAt: new Date().toISOString(),
           };
           ctx.version.exportAsset = undefined;
+          ctx.version.exportSignature = undefined;
           break;
         }
         case "trim_clip": {
@@ -564,15 +584,13 @@ export async function POST(request: Request) {
           const clip = ctx.version.clips[ctx.segment.id];
           if (!clip) throw new Error("Import this clip first.");
           const trim = z.number().min(0).max(600).parse(p.value);
-          if (
-            clip.media.duration - trim <
-            ctx.segment.end - ctx.segment.start - 0.035
-          )
+          if (clip.media.duration - trim - ctx.segment.overlap <= 0.001)
             throw new Error(
-              "Clip trim leaves too little video for this segment.",
+              "Choose a trim before the clip ends, allowing for the planned overlap.",
             );
           clip.trim = trim;
           ctx.version.exportAsset = undefined;
+          ctx.version.exportSignature = undefined;
           break;
         }
         case "assemble": {

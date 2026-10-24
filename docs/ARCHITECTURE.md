@@ -1,6 +1,6 @@
 # Local reenactment pipeline
 
-This is a single-user Next.js Node application. This branch uses OpenAI-compatible chat completions through a configured local 9router instance. FFmpeg extracts timestamped JPEG frames; the source video is not sent to a chat endpoint. Transcription is a separate local Whisper worker, manual entry, or an explicitly selected timestamp-capable 9router speech route. No Studio action calls Gemini.
+This is a single-user Next.js Node application. This branch uses OpenAI-compatible chat completions through a configured local 9router instance. FFmpeg extracts timestamped JPEG frames; the source video is not sent to a chat endpoint. Transcription is a separate local Whisper worker, manual entry, or an explicitly selected timestamp-capable 9router speech route. These analysis/speech adapters do not call the Gemini API. An optional browser-backed Flow adapter uses the user's signed-in Flow subscription for video generation.
 
 ## Persistence
 
@@ -9,6 +9,7 @@ This is a single-user Next.js Node application. This branch uses OpenAI-compatib
   analyses/<id>.json       Source, FFmpeg evidence, actors, shots, exact editable turns
   characters/<id>.json     Appearance, references, provider/model/voice/settings
   projects/<id>.json       Analysis ID plus independent reenactment versions
+  flow-jobs/<id>.json      Immutable job inputs, live quote, generation/upscale state and saved result IDs
   cache/<hash>.json        Source, transcription, visual, TTS and image reuse indexes
   assets/<uuid>.<ext>      Original media, takes, frames, clips, packages, exports
 ```
@@ -21,6 +22,8 @@ The browser stores the 9router connection, transcript mode, optional route switc
 
 ## Service boundaries
 
+Optional `Analysis.sourceContext` stores the user's description of the original footage, independently of cast and creative direction. Saving it is local and leaves the current analysis and plans intact. Initial analysis, motion refinement, and an explicit analysis update pass it as unverified context to every visual window; evidence takes precedence and optional model `contextNotes` become review warnings. Cache keys include the normalized description. `analyzedSourceContext` records the description used by the last successful run, so edits allow updating an already analyzed source without silently reusing the old result. Successful updates advance the analysis revision and require replanning, preserving transcript corrections and reviewed motion beats. Other projects sharing the source analysis also share its description.
+
 | Service                     | Responsibility                                                                                                  |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `VideoAnalysisService`      | FFprobe metadata, FFmpeg hard cuts and audio evidence; cached OpenAI analysis of timestamped frames via 9router |
@@ -31,8 +34,14 @@ The browser stores the 9router connection, transcript mode, optional route switc
 | `ScenePlannerService`       | Hard-cut-safe segment coverage, pause preference, supported durations, controlled overlap and credits           |
 | `PromptGenerationService`   | Character-agnostic manual Flow prompts with original dialogue and motion timing                                 |
 | `VideoAssemblyService`      | Clip validation/trim/normalization, concat, aligned audio, captions, disclosure, MP4 and Flow ZIP packages      |
+| `FlowJobService`            | Persistent job state, credit bounds, duplicate prevention, interrupted submission recovery and result reuse     |
+| `FlowBrowserService`        | Dedicated signed-in browser transport, image uploads, controls/quote, native generation, status and downloads   |
 
 `POST /api/studio` accepts multipart form data: `action`, JSON `payload`, and an optional `file`. IDs and edit payloads are validated. `GET /api/studio` loads the saved state. `/api/assets/<uuid.ext>` supports byte ranges for video seeking. Host and Origin checks constrain these APIs to the local workspace. FFmpeg runs directly with argument arrays, without a shell.
+
+`/api/studio/flow` is a separate local JSON job API. Its browser transport uses Playwright Core and loopback CDP; Chrome must remain running with its own signed-in profile. Source analysis and character settings are not coupled to browser authentication. Preparation uploads reference images and records a live quote/draft signature. Submission revalidates both, persists intent before clicking, and never automatically retries an uncertain outcome. Generation and upscale have separate states. Stale source/character/reference bindings block submission and import. See [Flow bridge API](FLOW_BRIDGE_API.md).
+
+The optional `FLOW_CLIPS` audio mode reconstructs imported clip audio with each clip's trim/overlap and source-relative placement, then applies the global offset on the assembled interval. This preserves native Flow voices without a TTS request. Original remains the default and continues to use the selected source soundtrack.
 
 ## Timing and quality
 
@@ -48,6 +57,8 @@ Each generated take is immutable. Text, emotion or saved voice changes make it s
 
 Generation overlap is discarded from the beginning of the next clip. Export rounds cumulative frame boundaries at 30fps to avoid accumulating per-clip drift. Letterboxing preserves composition in 1280×720 or 720×1280. Final duration is checked within 100ms. Original mode preserves the recorded performance; MP4 encoding converts its soundtrack to AAC. Captions are optional MP4 subtitle tracks; disclosure is a visible overlay. Mouth synchronization is reviewed manually, not automatically scored or repaired.
 
+Replacing an imported clip writes a new asset, records its optional filename/import time, and clears both export fields. Replacement applies only to its assigned segment. Longer uploads use only the selected trim and allocated segment duration. Shorter, manually sped-up clips are accepted when usable video remains after trim/overlap; FFmpeg keeps their playback speed and clones the final frame to fill the segment, preserving subsequent source and audio timestamps. Imported clip audio is not stretched; uncovered intervals are silent in generated-clip audio mode. The workspace shows the assigned file and used portion, warns about unused footage or final-frame holds, and lists assignments before export. Video players remount when their asset changes.
+
 Originals, generated outputs and intermediate files remain on disk for reuse. There is no automatic destructive cache cleanup. Back up the complete data directory, and monitor disk space for long projects. The 512MB/10-minute source limit keeps the in-memory multipart MVP manageable; use short clips for low-cost iteration.
 
 Each version can save an optional `sourceRange`; absent ranges retain the full-source behavior of existing projects. The shared range validator rejects endpoints outside the original or intervals shorter than one export frame. Planning intersects shots with the selection while retaining source timestamps and shot IDs. Changing the range invalidates the plan and export without changing analysis or another version. Assembly validates coverage of the selection, rounds frames relative to its start, applies audio offsets on the source timeline, then trims/rebases audio and captions to output time zero. TTS takes are required only for dialogue intersecting the selection. Flow manifests include the selected range.
@@ -55,6 +66,8 @@ Each version can save an optional `sourceRange`; absent ranges retain the full-s
 Shot splits can be undone while editing, and visible remove-cut controls merge saved or unsaved adjacent shots. Merging rejoins fragments of the same motion beat without duplicate IDs, preserves timing evidence where possible and clears affected verification. The complete analysis timeline remains required; range selection never deletes source analysis.
 
 ## Optional media adapters and compatibility
+
+Version `assemblyTiming` defaults to `SOURCE` when absent. `EDITED_CLIPS` instead places each earlier imported clip sequentially at its full uploaded length after trim/overlap, retaining any manual speed edits without intermediate holds. The final clip fills the remaining selected source/soundtrack duration: a 17-second upload uses seven seconds when seven seconds remain, regardless of its original shot slot. A short final clip holds its last frame. The shared `assemblyTimeline` drives video frame counts, native clip-audio placement and UI timings. Earlier clips that consume the entire soundtrack are rejected with an actionable error before encoding; no final clip is silently discarded. Source/TTS/uploaded soundtrack and subtitle timestamps retain their selected source timing rather than following the shifted visual cuts. This option changes export only and never replans scenes or regenerates assets.
 
 Optional version-level `appearanceNotes` maps source actor IDs to trimmed visual customization text (up to 2,000 characters per actor). Nonempty notes require a valid replacement assignment; unmapping in the UI clears its notes. A shared normalizer removes empty notes and sorts IDs, so whitespace/key order cannot invalidate caches. Actor-scoped instructions feed both keyframes and manual Flow prompts, override conflicting source/reference accessories or clothing and retain unmodified identity, dialogue, action and voice. Notes do not modify character profiles. Changes invalidate generated visuals/clips for only the edited version while preserving analysis, plans, original frames and audio. Notes are copied with versions and included in Flow package manifests and image cache keys, preventing stale appearance inheritance at segment boundaries.
 

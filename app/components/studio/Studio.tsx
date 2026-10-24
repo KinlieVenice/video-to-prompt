@@ -531,6 +531,8 @@ export function Studio() {
                     </div>
                     <div hidden={tab !== "flow"}>
                       <FlowPanel
+                        projectId={project!.id}
+                        onImported={load}
                         analysis={analysis}
                         version={version}
                         characters={data.characters}

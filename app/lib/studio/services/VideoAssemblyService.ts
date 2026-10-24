@@ -13,6 +13,7 @@ import { probe, run } from "../server/ffmpeg";
 import { VoiceService } from "./VoiceService";
 import { segmentMotion, segmentOpeningState } from "../motion";
 import { reenactmentRange } from "../range";
+import { assemblyTimeline } from "../assembly";
 import { visualDirection } from "../visualDirection";
 import { appearanceNotes } from "../appearance";
 
@@ -129,19 +130,19 @@ export class VideoAssemblyService {
     const [width, height] =
       version.aspect === "9:16" ? [720, 1280] : [1280, 720];
     const normalized: string[] = [];
+    const timeline = assemblyTimeline(analysis, version);
     let outputCursor = 0;
-    for (const segment of version.segments) {
+    for (const [index, segment] of version.segments.entries()) {
       const clip = version.clips[segment.id];
       const media = await probe(assetPath(clip.asset));
-      const trim = clip.trim + segment.overlap;
-      const duration = segment.end - segment.start - segment.overlap;
-      if (!media.width || trim < 0 || media.duration - trim < duration - 0.035)
+      const { trim, duration, end } = timeline[index];
+      if (!media.width || trim < 0 || media.duration - trim <= 0.001)
         throw new Error(
-          `Clip ${segment.id} is too short after its trim and overlap. Adjust trim or upload a longer clip.`,
+          `Clip ${segment.id} ends before its trim and overlap. Adjust trim or upload a longer clip.`,
         );
       const output = await newAsset("mp4");
       // Round cumulative boundaries, avoiding per-clip rounding drift on long timelines.
-      const nextFrame = Math.round((segment.end - range.start) * 30),
+      const nextFrame = Math.round(end * 30),
         frames = nextFrame - Math.round(outputCursor * 30);
       if (frames < 1)
         throw new Error(
@@ -155,7 +156,7 @@ export class VideoAssemblyService {
         assetPath(clip.asset),
         "-an",
         "-vf",
-        `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=0.05`,
+        `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=${duration + 0.05}`,
         "-frames:v",
         String(frames),
         "-c:v",
@@ -168,7 +169,7 @@ export class VideoAssemblyService {
         "yuv420p",
         output.path,
       ]);
-      outputCursor = segment.end - range.start;
+      outputCursor = end;
       normalized.push(output.asset);
     }
     const list = await writeAsset(
@@ -203,7 +204,29 @@ export class VideoAssemblyService {
       `atrim=start=${Math.max(0, -offset)},asetpts=PTS-STARTPTS,adelay=${Math.round(Math.max(0, offset) * 1000)}:all=1`;
     const selectedAudio = `apad,atrim=start=${range.start}:end=${range.end},asetpts=PTS-STARTPTS`;
     let hasAudio = false;
-    if (version.audioMode === "ORIGINAL") {
+    if (version.audioMode === "FLOW_CLIPS") {
+      const labels: string[] = [];
+      for (const [placementIndex, segment] of version.segments.entries()) {
+        const clip = version.clips[segment.id];
+        const media = await probe(assetPath(clip.asset));
+        if (!media.hasAudio) continue;
+        const index = addAudio(clip.asset),
+          label = `clip${index}`;
+        const { trim, duration, start: delay } = timeline[placementIndex];
+        filters.push(
+          `[${index}:a]atrim=start=${trim}:duration=${duration},asetpts=PTS-STARTPTS,adelay=${Math.round(delay * 1000)}:all=1[${label}]`,
+        );
+        labels.push(`[${label}]`);
+      }
+      if (!labels.length)
+        throw new Error(
+          "The imported clips have no audio tracks. Choose another audio mode.",
+        );
+      filters.push(
+        `${labels.join("")}amix=inputs=${labels.length}:normalize=0,${offsetFilter(version.audioOffset)},apad,atrim=duration=${total}[audio]`,
+      );
+      hasAudio = true;
+    } else if (version.audioMode === "ORIGINAL") {
       if (analysis.media.hasAudio) {
         const index = addAudio(analysis.sourceAsset);
         filters.push(

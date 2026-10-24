@@ -27,6 +27,11 @@ const MODES: { id: AudioMode; name: string; description: string }[] = [
     description: "Use your own recording or finished mix.",
   },
   {
+    id: "FLOW_CLIPS",
+    name: "Generated clip audio",
+    description: "Keep voices, music and effects from the imported Flow clips.",
+  },
+  {
     id: "SILENT",
     name: "Silent",
     description: "Export visuals with no audio track.",
@@ -59,8 +64,9 @@ export function AudioPanel({
         </p>
         <p className="hint">
           Export uses source {seconds(range.start)}–{seconds(range.end)}. Audio
-          offsets are applied on the source timeline before this interval is
-          trimmed.
+          {version.audioMode === "FLOW_CLIPS"
+            ? "offsets apply to the assembled clip soundtrack."
+            : "offsets are applied on the source timeline before this interval is trimmed."}
         </p>
         <div className="mode-grid">
           {MODES.map((mode) => (
@@ -91,6 +97,17 @@ export function AudioPanel({
           </span>
         </label>
       </section>
+      {version.audioMode === "FLOW_CLIPS" && (
+        <section className="panel stack">
+          <h3>Keep the generated performance.</h3>
+          <p className="muted">
+            Export uses each imported clip’s audio with the same trim and
+            overlap as its video. This preserves native Flow voices. The source
+            song is replaced in this mode; choose Original to export your
+            uploaded video’s soundtrack.
+          </p>
+        </section>
+      )}
       {version.audioMode === "ORIGINAL" && (
         <section className="panel stack">
           <h3>The original soundtrack, preserved.</h3>

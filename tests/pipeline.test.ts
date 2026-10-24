@@ -469,6 +469,138 @@ test("Phase 4: FFmpeg imports and assembles all four audio modes, portrait, capt
   );
 });
 
+test("shorter replacement with the same filename clears the old export and holds its final frame without moving other segments", async () => {
+  const saved = await getRecord<Project>("projects", project.id);
+  const version = saved.versions[0];
+  const first = version.segments[0],
+    second = version.segments[1];
+  for (const segment of version.segments) {
+    const imported = await action(
+      "import_clip",
+      { segmentId: segment.id },
+      new File([await readFile(assetPath(sourceAsset))], "take.mp4", {
+        type: "video/mp4",
+      }),
+    );
+    assert.equal(imported.response.status, 200, JSON.stringify(imported.body));
+  }
+  const before = await action("assemble");
+  assert.equal(before.response.status, 200, JSON.stringify(before.body));
+  const beforeVersion = before.body.projects[0].versions[0];
+  const replacement = await newAsset("mp4");
+  await run("ffmpeg", [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=blue:s=320x180:r=30:d=1",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    replacement.path,
+  ]);
+  const replaced = await action(
+    "import_clip",
+    { segmentId: first.id },
+    new File([await readFile(replacement.path)], "take.mp4", {
+      type: "video/mp4",
+    }),
+  );
+  assert.equal(replaced.response.status, 200, JSON.stringify(replaced.body));
+  const replacedVersion = replaced.body.projects[0].versions[0];
+  assert.notEqual(
+    replacedVersion.clips[first.id].asset,
+    beforeVersion.clips[first.id].asset,
+  );
+  assert.equal(replacedVersion.clips[first.id].sourceName, "take.mp4");
+  assert.ok(replacedVersion.clips[first.id].importedAt);
+  assert.deepEqual(
+    replacedVersion.clips[second.id],
+    beforeVersion.clips[second.id],
+  );
+  assert.equal(replacedVersion.exportAsset, undefined);
+  assert.equal(replacedVersion.exportSignature, undefined);
+  const after = await action("assemble");
+  assert.equal(after.response.status, 200, JSON.stringify(after.body));
+  const afterVersion = after.body.projects[0].versions[0];
+  assert.notEqual(afterVersion.exportAsset, beforeVersion.exportAsset);
+  assert.ok(
+    Math.abs(
+      (await probe(assetPath(afterVersion.exportAsset))).duration -
+        analysis.media.duration,
+    ) < 0.1,
+  );
+  const luma = async (asset: string, at: number) => {
+    const result = await run("ffmpeg", [
+      "-ss",
+      String(at),
+      "-i",
+      assetPath(asset),
+      "-vf",
+      "signalstats,metadata=print:key=lavfi.signalstats.YAVG",
+      "-frames:v",
+      "1",
+      "-f",
+      "null",
+      "-",
+    ]);
+    const value = result.stderr.match(/lavfi.signalstats.YAVG=([\d.]+)/)?.[1];
+    assert.ok(value, result.stderr);
+    return Number(value);
+  };
+  assert.ok(
+    Math.abs(
+      (await luma(beforeVersion.exportAsset, 0.5)) -
+        (await luma(afterVersion.exportAsset, 0.5)),
+    ) > 20,
+  );
+  assert.ok(
+    Math.abs(
+      (await luma(afterVersion.exportAsset, 0.5)) -
+        (await luma(afterVersion.exportAsset, 1.7)),
+    ) < 2,
+  );
+  assert.ok(
+    Math.abs(
+      (await luma(beforeVersion.exportAsset, 2.5)) -
+        (await luma(afterVersion.exportAsset, 2.5)),
+    ) < 2,
+  );
+  const trimmed = await action("trim_clip", {
+    segmentId: first.id,
+    value: 0.25,
+  });
+  assert.equal(trimmed.response.status, 200);
+  assert.equal(trimmed.body.projects[0].versions[0].clips[first.id].trim, 0.25);
+  const invalid = await action("trim_clip", { segmentId: first.id, value: 1 });
+  assert.equal(invalid.response.status, 400);
+  const updated = await getRecord<Project>("projects", project.id);
+  const editedVersion = {
+    ...updated.versions[0],
+    assemblyTiming: "EDITED_CLIPS",
+  };
+  const switched = await action("save_version", { value: editedVersion });
+  assert.equal(switched.response.status, 200, JSON.stringify(switched.body));
+  assert.equal(
+    switched.body.projects[0].versions[0].assemblyTiming,
+    "EDITED_CLIPS",
+  );
+  const edited = await action("assemble");
+  assert.equal(edited.response.status, 200, JSON.stringify(edited.body));
+  const editedAsset = edited.body.projects[0].versions[0].exportAsset;
+  assert.ok(
+    Math.abs(
+      (await probe(assetPath(editedAsset))).duration - analysis.media.duration,
+    ) < 0.1,
+  );
+  // The shortened first clip ends at 0.75s. The final clip now uses 3.25s,
+  // showing its red beginning then blue tail instead of its old 2s slot.
+  assert.ok(
+    (await luma(editedAsset, 1.2)) - (await luma(editedAsset, 3.7)) > 20,
+  );
+});
+
 test("Phase 2: unsupported voice design fails explicitly without sending a provider request", async () => {
   await assert.rejects(() => VoiceService.design(), /not supported/);
 });

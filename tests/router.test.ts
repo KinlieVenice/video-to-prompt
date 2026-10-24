@@ -305,6 +305,103 @@ test("OpenAI visual analysis uses timestamped frames, preserves corrections/cuts
   }
 });
 
+test("source context is saved independently, changes analysis caching, and reports evidence conflicts", async () => {
+  const version = newVersion(randomUUID());
+  const project = {
+    id: randomUUID(),
+    name: "Context test",
+    analysisId: analysis.id,
+    versions: [version],
+    updatedAt: new Date().toISOString(),
+  };
+  await saveRecord("projects", project);
+  const save = async (value: string) => {
+    const form = new FormData();
+    form.set("action", "save_source_context");
+    form.set(
+      "payload",
+      JSON.stringify({ projectId: project.id, versionId: version.id, value }),
+    );
+    return POST(
+      new Request("http://localhost:3000/api/studio", {
+        method: "POST",
+        body: form,
+      }),
+    );
+  };
+  const requestsBefore = requests.length;
+  assert.equal((await save("x".repeat(4001))).status, 400);
+  assert.equal(
+    (await save("  A dance challenge with a red-to-blue cut.  ")).status,
+    200,
+  );
+  const saved = await getRecord<Analysis>("analyses", analysis.id);
+  assert.equal(
+    saved.sourceContext,
+    "A dance challenge with a red-to-blue cut.",
+  );
+  assert.equal(requests.length, requestsBefore);
+  const contextConnection = { ...connection, model: "cx/context-test" };
+  let calls = 0;
+  handler = (_req, res, raw) => {
+    calls++;
+    const prompt = JSON.parse(raw).messages[0].content[0].text;
+    assert.match(prompt, /SOURCE CONTEXT:/);
+    assert.match(prompt, /unverified context/);
+    assert.match(
+      prompt,
+      /Never invent events or assign timestamps from the description/,
+    );
+    assert.ok(
+      prompt.includes(
+        calls <= saved.shots.length
+          ? saved.sourceContext!
+          : "An object changes color.",
+      ),
+    );
+    json(res, {
+      choices: [
+        {
+          finish_reason: "stop",
+          message: {
+            content: JSON.stringify({
+              ...visual,
+              contextNotes: [
+                "The supplied frames do not confirm a dance challenge.",
+              ],
+            }),
+          },
+        },
+      ],
+    });
+  };
+  const first = await VideoAnalysisService.analyze(
+    { ...analysis, sourceContext: saved.sourceContext },
+    contextConnection,
+  );
+  assert.equal(first.analyzedSourceContext, saved.sourceContext);
+  assert.ok(
+    first.warnings.includes(
+      "Source context review: The supplied frames do not confirm a dance challenge.",
+    ),
+  );
+  const initialCalls = calls;
+  await VideoAnalysisService.analyze(first, contextConnection);
+  assert.equal(calls, initialCalls);
+  const changed = await VideoAnalysisService.analyze(
+    {
+      ...first,
+      shots: analysis.shots,
+      sourceContext: "An object changes color.",
+    },
+    contextConnection,
+  );
+  assert.equal(calls, initialCalls + saved.shots.length);
+  assert.equal(changed.analyzedSourceContext, "An object changes color.");
+  assert.deepEqual(changed.turns, first.turns);
+  assert.equal(changed.revision, first.revision + 1);
+});
+
 test("motion-only refinement reuses partial results, keeps transcript/actors/reviewed beats and invalidates stale exports", async () => {
   const preserved: MotionBeat = {
     id: "human-beat",

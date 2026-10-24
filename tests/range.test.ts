@@ -5,6 +5,7 @@ import path from "node:path";
 import { rm } from "node:fs/promises";
 import { POST } from "../app/api/studio/route";
 import { reenactmentRange } from "../app/lib/studio/range";
+import { assemblyTimeline } from "../app/lib/studio/assembly";
 import { mergeShotMotion, trimShotMotion } from "../app/lib/studio/motion";
 import {
   analysisEditSchema,
@@ -76,6 +77,72 @@ before(async () => {
 });
 after(async () => {
   await rm(root, { recursive: true, force: true });
+});
+
+test("edited clip timing gives a 17s final upload the remaining 7s instead of its original 0.17s slot", () => {
+  const version = newVersion("edited");
+  version.assemblyTiming = "EDITED_CLIPS";
+  const source = { ...analysis, media: { ...analysis.media, duration: 44 } };
+  version.sourceRange = { start: 14, end: 44 };
+  version.segments = [
+    {
+      id: "a",
+      shotId: "shot",
+      start: 14,
+      end: 29,
+      overlap: 0,
+      duration: 8,
+      strategy: "FRAMES",
+      credits: 0,
+      warnings: [],
+    },
+    {
+      id: "b",
+      shotId: "shot",
+      start: 29,
+      end: 43.83,
+      overlap: 0,
+      duration: 8,
+      strategy: "FRAMES",
+      credits: 0,
+      warnings: [],
+    },
+    {
+      id: "c",
+      shotId: "shot",
+      start: 43.83,
+      end: 44,
+      overlap: 0,
+      duration: 4,
+      strategy: "FRAMES",
+      credits: 0,
+      warnings: [],
+    },
+  ];
+  for (const [i, segment] of version.segments.entries())
+    version.clips[segment.id] = {
+      asset: "unused",
+      trim: 0,
+      media: { ...analysis.media, duration: [10, 13, 17][i] },
+    };
+  const timeline = assemblyTimeline(source, version);
+  assert.deepEqual(
+    timeline.map(({ start, end }) => [start, end]),
+    [
+      [0, 10],
+      [10, 23],
+      [23, 30],
+    ],
+  );
+  assert.equal(timeline[2].used, 7);
+  assert.equal(timeline[2].hold, 0);
+  version.clips.c.media.duration = 5;
+  assert.equal(assemblyTimeline(source, version)[2].hold, 2);
+  version.clips.a.media.duration = 29;
+  assert.throws(
+    () => assemblyTimeline(source, version),
+    /leave time for the final clip/,
+  );
 });
 
 test("range planning covers only the selected interval while retaining real camera cuts", () => {
@@ -278,9 +345,23 @@ test("selected exports rebase clips, original music, all audio modes and caption
     "ORIGINAL",
     "UPLOADED",
     "CHARACTER_TTS",
+    "FLOW_CLIPS",
     "SILENT",
   ] as const) {
-    const current = { ...version, audioMode };
+    const current = {
+      ...version,
+      audioMode,
+      ...(audioMode === "FLOW_CLIPS"
+        ? {
+            clips: Object.fromEntries(
+              Object.entries(version.clips).map(([id, clip]) => [
+                id,
+                { ...clip, trim: 0.2 },
+              ]),
+            ),
+          }
+        : {}),
+    };
     const output = await VideoAssemblyService.assemble(timed, current, [
       character,
     ]);
@@ -295,7 +376,7 @@ test("selected exports rebase clips, original music, all audio modes and caption
       subtitles(timed, current, [character]),
       /00:00:00,000 --> 00:00:01,250/,
     );
-    if (audioMode === "ORIGINAL") {
+    if (audioMode === "ORIGINAL" || audioMode === "FLOW_CLIPS") {
       const sound = await run("ffmpeg", [
         "-i",
         assetPath(output.asset),
@@ -309,10 +390,16 @@ test("selected exports rebase clips, original music, all audio modes and caption
       const rate = Number(
         sound.stderr.match(/Zero crossings rate: ([\d.]+)/)?.[1],
       );
-      assert.ok(
-        rate > 0.19 && rate < 0.25,
-        `Expected the 880 Hz second section of the song, got crossing rate ${rate}`,
-      );
+      if (audioMode === "ORIGINAL")
+        assert.ok(
+          rate > 0.19 && rate < 0.25,
+          `Expected source 880 Hz, got crossing rate ${rate}`,
+        );
+      else
+        assert.ok(
+          rate > 0.08 && rate < 0.14,
+          `Expected the imported clip's 440 Hz audio, got crossing rate ${rate}`,
+        );
     }
   }
   assert.match(

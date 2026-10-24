@@ -27,9 +27,11 @@ import { PromptGenerationService } from "../../lib/studio/services/PromptGenerat
 import type { StudioAction } from "./Studio";
 import { segmentMotionText } from "../../lib/studio/motion";
 import { reenactmentRange } from "../../lib/studio/range";
+import { assemblyTimeline } from "../../lib/studio/assembly";
 import { visualDirection } from "../../lib/studio/visualDirection";
 import { appearanceNotes } from "../../lib/studio/appearance";
 import { VisualDirectionControls } from "./VisualDirectionControls";
+import { FlowBridgePanel } from "./FlowBridgePanel";
 import {
   continuousPredecessor,
   referenceLinkCurrent,
@@ -115,6 +117,8 @@ function FramePair({
 }
 
 export function FlowPanel({
+  projectId,
+  onImported,
   analysis,
   version,
   characters,
@@ -122,6 +126,8 @@ export function FlowPanel({
   run,
   busy,
 }: {
+  projectId: string;
+  onImported: () => Promise<void>;
   analysis: Analysis;
   version: Version;
   characters: Character[];
@@ -140,6 +146,12 @@ export function FlowPanel({
       version.frames[segment.id]?.generated?.last,
   ).length;
   const range = reenactmentRange(analysis, version);
+  let assembly: ReturnType<typeof assemblyTimeline> = [];
+  try {
+    assembly = assemblyTimeline(analysis, version);
+  } catch {
+    // Export displays missing clips or timing conflicts with the full plan.
+  }
   const direction = visualDirection(version);
   const actorNotes = appearanceNotes(version);
   const needsBackground =
@@ -191,6 +203,14 @@ export function FlowPanel({
               value={version.target}
               onChange={(e) =>
                 updateVersion({
+                  ...(e.target.value === "VEO_LITE" && version.flowSettings
+                    ? {
+                        flowSettings: {
+                          ...version.flowSettings,
+                          resolution: "720p" as const,
+                        },
+                      }
+                    : {}),
                   target: e.target.value as Version["target"],
                   maxDuration:
                     e.target.value === "VEO_LITE"
@@ -207,7 +227,7 @@ export function FlowPanel({
               }
             >
               <option value="VEO_LITE">Veo 3.1 Lite</option>
-              <option value="OMNI_FLASH">Gemini Omni Flash · 720p</option>
+              <option value="OMNI_FLASH">Omni 1.1 Flash</option>
             </select>
           </label>
           <label>
@@ -333,6 +353,15 @@ export function FlowPanel({
           </span>
         </div>
       </section>
+      <FlowBridgePanel
+        projectId={projectId}
+        version={version}
+        updateVersion={updateVersion}
+        run={run}
+        onImported={onImported}
+        disabled={busy}
+        stale={stale}
+      />
       <div className="cost-strip">
         <div>
           <strong>{version.segments.length}</strong>
@@ -390,6 +419,7 @@ export function FlowPanel({
         const shot = analysis.shots.find((s) => s.id === segment.shotId);
         const frames = version.frames[segment.id];
         const clip = version.clips[segment.id];
+        const placement = assembly[i];
         const turns = analysis.turns.filter(
           (t) => t.end > segment.start && t.start < segment.end,
         );
@@ -634,11 +664,16 @@ export function FlowPanel({
                     ? `${seconds(clip.media.duration)} · ${clip.media.width} × ${clip.media.height} · resolution will be normalized at export`
                     : "Generate manually in Flow, download MP4, and upload it here."}
                 </p>
+                <p className="hint">
+                  This upload replaces segment {i + 1} only: source{" "}
+                  {seconds(segment.start)}–{seconds(segment.end)}.
+                </p>
               </div>
               <label className="button upload-button">
                 <Film size={14} />
                 {clip ? "Replace clip" : "Import Flow clip"}
                 <input
+                  aria-label={`Upload clip for segment ${i + 1}`}
                   disabled={busy || stale}
                   type="file"
                   accept=".mp4,.mov"
@@ -653,11 +688,61 @@ export function FlowPanel({
             {clip && (
               <div className="imported-preview">
                 <video
+                  key={clip.asset}
                   controls
                   playsInline
                   preload="metadata"
                   src={assetUrl(clip.asset)}
                 />
+                {version.assemblyTiming === "EDITED_CLIPS" ? (
+                  <p className="hint">
+                    Assigned file: {clip.sourceName || clip.asset}.{" "}
+                    {placement
+                      ? `Export uses ${seconds(placement.trim)}–${seconds(placement.trim + placement.used)} of this file, at ${seconds(placement.start)}–${seconds(placement.end)} in the final video.${placement.hold > 0.035 ? ` Final frame holds for ${seconds(placement.hold)}.` : ""}`
+                      : "Edited clip timing is enabled. Earlier clips use their uploaded lengths; the final clip fills the remaining soundtrack. Review the timing in Assemble & export."}
+                  </p>
+                ) : (
+                  <p className="hint">
+                    Assigned file: {clip.sourceName || clip.asset}. Export uses{" "}
+                    {seconds(clip.trim + segment.overlap)}–
+                    {seconds(
+                      Math.min(
+                        clip.media.duration,
+                        clip.trim + segment.end - segment.start,
+                      ),
+                    )}{" "}
+                    of this file. The player shows the full uploaded clip.
+                  </p>
+                )}
+                {version.assemblyTiming !== "EDITED_CLIPS" &&
+                  clip.media.duration - clip.trim <
+                    segment.end - segment.start - 0.035 && (
+                    <p className="notice">
+                      This clip keeps its uploaded speed. Its final frame will
+                      hold for{" "}
+                      {seconds(
+                        segment.end -
+                          segment.start -
+                          (clip.media.duration - clip.trim),
+                      )}{" "}
+                      to fill this segment and keep the selected soundtrack in
+                      sync.
+                    </p>
+                  )}
+                {version.assemblyTiming !== "EDITED_CLIPS" &&
+                  clip.media.duration -
+                    clip.trim -
+                    (segment.end - segment.start) >
+                    0.25 && (
+                    <p className="notice">
+                      Only{" "}
+                      {seconds(segment.end - segment.start - segment.overlap)}{" "}
+                      of this {seconds(clip.media.duration)} clip will appear in
+                      the final video. Adjust the trim to choose which part, or
+                      upload to the intended segment. Other segments keep their
+                      assigned clips.
+                    </p>
+                  )}
                 <label>
                   Trim from clip start (s)
                   <input

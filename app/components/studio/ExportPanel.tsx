@@ -4,6 +4,7 @@ import type { Analysis, Version } from "../../lib/studio/types";
 import { assetUrl, seconds } from "../../lib/studio/types";
 import type { StudioAction } from "./Studio";
 import { reenactmentRange } from "../../lib/studio/range";
+import { assemblyTimeline } from "../../lib/studio/assembly";
 
 export function ExportPanel({
   analysis,
@@ -20,7 +21,18 @@ export function ExportPanel({
 }) {
   const range = reenactmentRange(analysis, version);
   const imported = version.segments.filter((s) => version.clips[s.id]).length;
+  let timeline: ReturnType<typeof assemblyTimeline> = [];
+  let timingError = "";
+  if (version.segments.length && imported === version.segments.length) {
+    try {
+      timeline = assemblyTimeline(analysis, version);
+    } catch (error) {
+      timingError =
+        error instanceof Error ? error.message : "Review clip timing.";
+    }
+  }
   const ready =
+    !timingError &&
     version.segments.length > 0 &&
     imported === version.segments.length &&
     version.planRevision === analysis.revision;
@@ -32,7 +44,8 @@ export function ExportPanel({
         <p className="muted">
           FFmpeg validates imported clips, removes generation padding and
           overlap, normalizes resolution, and restores the selected audio on the
-          source timeline.
+          source timeline. Choose whether video cuts follow the source or your
+          edited clip lengths.
         </p>
         <div className="stat-grid">
           <div>
@@ -52,6 +65,59 @@ export function ExportPanel({
             <span>audio mode</span>
           </div>
         </div>
+        <label>
+          Assembly timing
+          <select
+            aria-label="Assembly timing"
+            value={version.assemblyTiming || "SOURCE"}
+            onChange={(e) =>
+              updateVersion({
+                assemblyTiming: e.target.value as Version["assemblyTiming"],
+              })
+            }
+          >
+            <option value="SOURCE">Original segment timing</option>
+            <option value="EDITED_CLIPS">
+              Edited clip lengths · final clip fills remaining time
+            </option>
+          </select>
+        </label>
+        <p className="hint">
+          {version.assemblyTiming === "EDITED_CLIPS"
+            ? "Earlier clips play at their uploaded lengths after trim and overlap, without a hold between clips. The final clip fills the time left in the selected soundtrack: if 7 seconds remain, 7 seconds of a 17-second upload are used. The soundtrack is not sped up or shifted. A final clip that is too short holds its last frame."
+            : "Each clip stays in its original source slot. Short clips hold their final frame to fill that slot; longer clips are trimmed to fit."}
+        </p>
+        {timingError && (
+          <p className="notice" role="alert">
+            {timingError}
+          </p>
+        )}
+        {version.segments.length > 0 && (
+          <details>
+            <summary>Clips used in this export</summary>
+            <div className="stack">
+              {version.segments.map((segment, i) => {
+                const clip = version.clips[segment.id];
+                const placement = timeline[i];
+                return (
+                  <div key={segment.id}>
+                    <strong>
+                      Segment {i + 1} · source {seconds(segment.start)}–
+                      {seconds(segment.end)}
+                    </strong>
+                    <p className="hint">
+                      {clip
+                        ? placement
+                          ? `${clip.sourceName || clip.asset} · use ${seconds(placement.trim)}–${seconds(placement.trim + placement.used)} from uploaded clip · final video ${seconds(placement.start)}–${seconds(placement.end)}${placement.hold > 0.035 ? ` · hold final frame ${seconds(placement.hold)}` : ""}`
+                          : `${clip.sourceName || clip.asset} · ${seconds(clip.media.duration)} uploaded; review timing above`
+                        : "No clip assigned"}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        )}
         <div className="two-cols">
           <label>
             Output aspect ratio
@@ -135,6 +201,7 @@ export function ExportPanel({
             </a>
           </div>
           <video
+            key={version.exportAsset}
             className="final-preview"
             controls
             playsInline

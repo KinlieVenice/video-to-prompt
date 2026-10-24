@@ -1,6 +1,6 @@
 # API charges and Flow credits
 
-Official documentation checked **23 October 2026**. API billing and Flow subscription credits are separate. The application never calls a video generation API or automates Flow.
+Official documentation checked **23 October 2026**; the experimental browser test below ran **24 October 2026**. API billing and Flow subscription credits are separate. This branch includes a manual workspace and an optional [local browser-backed Flow API](FLOW_BRIDGE_API.md). The bridge uses the signed-in Flow subscription and requires its dedicated Chrome process to remain running.
 
 ## OpenAI through 9router
 
@@ -21,6 +21,8 @@ Voice design is not offered by this branch's router adapter. Previously saved Ge
 
 ## Manual Google Flow
 
+Saving the optional source description makes no provider request. Applying a changed description with **Update analysis with description** or motion refinement uses new visual-analysis cache keys and can make the same model requests as normal analysis. Existing transcript text and speech caches are reused; saving text alone never starts generation.
+
 Background and expression controls add no analysis or speech requests. Reference generation still uses up to two image requests per segment (one with a valid inherited first frame). For a new background, the last-frame request includes the generated first frame as an additional environment reference; image-input usage follows the selected provider route. Changing a look requires new reference images and manually generated Flow clips, with new image usage/Flow credits. Previously generated files remain on disk.
 
 Scene completion uses the same image requests and source analysis, with no extra AI call. Preparing an aspect-ratio canvas uses local FFmpeg and is cached. Its generated first-frame environment reference adds image input to the existing last-frame request, under the selected image route's usage rules.
@@ -33,7 +35,25 @@ Baseline estimates use one 720p generation per segment:
 | Gemini Omni Flash              | 4 / 6 / 8 / 10 seconds | 7 / 10 / 12 / 15                                  |
 | External reusable 2D animation | Source interval        | 0 Flow credits; external rendering costs excluded |
 
-Retries, multiple outputs and upscaling add cost. Ultra lower-priority modes and 360p pricing are not inferred. Use the per-generation override when your account shows a different quote. Check [official Flow credit rates](https://support.google.com/flow/answer/16526234?hl=en) and confirm the quote in Flow before generating.
+Retries, multiple outputs and some upscaling operations can add cost. Ultra lower-priority modes and 360p pricing are not inferred by the existing planner. Use the per-generation override when your account shows a different quote. Check [official Flow credit rates](https://support.google.com/flow/answer/16526234?hl=en) and confirm the quote in Flow before generating.
+
+## Experimental Flow browser test
+
+The local bridge separates **Prepare** from **Generate**. Preparing uploads references and reads the live account quote without submitting video generation. Generate submits one output only after the operator selects the quoted credit amount; changed quotes and drafts fail before submission. Refresh, download and import do not request another generation. An uncertain submission is not automatically retried. Upscale only submits if live model pricing confirms zero cost; cached results are reused.
+
+**Generated clip audio** uses local FFmpeg and preserves imported Flow audio without a TTS call. **Original** remains the default for the source soundtrack. The additional implementation smoke tests prepared first/last and voice drafts and downloaded the existing diagnostic outputs; they spent no additional Flow credits. The new adapter's charged submission path has not been live-tested with a fresh generation.
+
+On 24 October 2026, the user authorized one diagnostic generation with a maximum cost of 4 Flow credits and an upscale only if free. This used the signed-in Flow subscription through its native browser UI, with REA recording the operation. No separate OpenAI, 9router or official Gemini API call was made for this test.
+
+| Operation                                         | Observed usage                                                                   |
+| ------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Omni 1.1 Flash, 4 seconds, 360p, 9:16, one output | 4-credit quote; one accepted generation                                          |
+| Original MP4 download                             | No additional generation                                                         |
+| Omni 360p to 720p upscale                         | Live account model price 0; returned balance unchanged after the upscale request |
+| Download completed upscale again                  | Existing result reused; no additional upscale request                            |
+| Total                                             | **4 Flow credits; 0 additional credits for upscale**                             |
+
+Both files passed FFmpeg inspection: 360 x 640 at 4.011 seconds and 720 x 1280 at 4 seconds, each 24 fps with H.264/AAC. This confirms those particular operations on this account. It does not establish native 720p generation, first/last-frame upload, voice-preview pricing or voice-generation support. Other models, output counts, durations and account tiers need their own live quotes. See the [Flow bridge investigation](FLOW_REA_BRIDGE.md) for evidence and remaining implementation work.
 
 ## Integration references
 
@@ -51,6 +71,6 @@ Official OpenAI schemas and 9router source were checked separately. Router-speci
 - [faster-whisper local worker](https://github.com/SYSTRAN/faster-whisper)
 - [FFmpeg filters](https://ffmpeg.org/ffmpeg-filters.html)
 
-Automated tests use a local fake router, mocked provider outputs and real FFmpeg media. They do not consume the user's subscription or API credits. Live account entitlements, ASR accuracy, visual identity and generated speech quality require testing with the user's configured providers. Whisper installation uses `scripts/requirements-whisper.txt` to avoid the PyAV 19 incompatibility in faster-whisper 1.2.1. Local setup and model caching are documented separately.
+The normal automated test suite uses a local fake router, mocked provider outputs and real FFmpeg media. It does not consume the user's subscription or API credits. The separately authorized live browser test above consumed Flow credits and is not part of that suite. Live account entitlements, ASR accuracy, visual identity and generated speech quality require testing with the user's configured providers. Whisper installation uses `scripts/requirements-whisper.txt` to avoid the PyAV 19 incompatibility in faster-whisper 1.2.1. Local setup and model caching are documented separately.
 
 Motion sampling, uncertainty ranges and cost limits are described in [Motion analysis](MOTION_ANALYSIS.md).

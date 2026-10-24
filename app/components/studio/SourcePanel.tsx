@@ -35,6 +35,13 @@ export function SourcePanel({
   const [turns, setTurns] = useState<Turn[]>(analysis.turns);
   const [split, setSplit] = useState(1);
   const [dirty, setDirty] = useState(false);
+  const [sourceContext, setSourceContext] = useState(
+    analysis.sourceContext || "",
+  );
+  const contextDirty =
+    sourceContext.trim() !== (analysis.sourceContext || "").trim();
+  const contextChanged =
+    sourceContext.trim() !== (analysis.analyzedSourceContext || "").trim();
   const [splitHistory, setSplitHistory] = useState<Shot[][]>([]);
   const range = reenactmentRange(analysis, version);
   const preview = useRef<HTMLVideoElement>(null);
@@ -158,21 +165,58 @@ export function SourcePanel({
               <span>original actors</span>
             </div>
           </div>
+          <label className="field">
+            <span>What’s happening in this video? (optional)</span>
+            <textarea
+              rows={3}
+              maxLength={4000}
+              value={sourceContext}
+              onChange={(e) => setSourceContext(e.target.value)}
+              placeholder="Example: A sauce fountain malfunctions. The person recoils, then tries to stop it."
+            />
+          </label>
+          <p className="hint">
+            Describe the original footage, including meme or challenge context.
+            AI checks this against the frames; timing still comes from the
+            source. Set character, background and expression changes in
+            Character library. This description is shared by versions using this
+            source analysis.
+          </p>
+          <button
+            className="button"
+            disabled={busy || !contextDirty || dirty}
+            onClick={() => run("save_source_context", { value: sourceContext })}
+          >
+            Save source description
+          </button>
+          {analysis.status === "ANALYZED" && contextChanged && (
+            <p className="hint">
+              Update analysis to apply this description. Existing analysis stays
+              available until the update succeeds. Model requests may be
+              charged; transcript and reviewed motion beats are preserved.
+            </p>
+          )}
           <button
             className="button primary"
-            disabled={busy || analysis.status === "ANALYZED" || dirty}
-            onClick={() => run("analyze")}
+            disabled={
+              busy ||
+              (analysis.status === "ANALYZED" && !contextChanged) ||
+              dirty
+            }
+            onClick={() => run("analyze", { sourceContext })}
           >
             <Sparkles size={16} />
             {analysis.status === "ANALYZED"
-              ? "Analysis saved for reuse"
+              ? contextChanged
+                ? "Update analysis with description"
+                : "Analysis saved for reuse"
               : "Analyze with OpenAI"}
           </button>
           {analysis.status === "ANALYZED" && (
             <button
               className="button"
               disabled={busy || dirty}
-              onClick={() => run("refine_motion")}
+              onClick={() => run("refine_motion", { sourceContext })}
             >
               <Sparkles size={16} />
               Refine motion timing
