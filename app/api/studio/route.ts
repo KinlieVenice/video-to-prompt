@@ -45,6 +45,7 @@ import { CharacterService } from "../../lib/studio/services/CharacterService";
 import { VoiceService } from "../../lib/studio/services/VoiceService";
 import { ScenePlannerService } from "../../lib/studio/services/ScenePlannerService";
 import { KeyframeService } from "../../lib/studio/services/KeyframeService";
+import { NicheFrameService } from "../../lib/studio/services/NicheFrameService";
 import { PromptGenerationService } from "../../lib/studio/services/PromptGenerationService";
 import { VideoAssemblyService } from "../../lib/studio/services/VideoAssemblyService";
 
@@ -546,12 +547,28 @@ export async function POST(request: Request) {
         case "extract_frames": {
           const ctx = needSegment();
           const old = ctx.version.frames[ctx.segment.id];
+          if (ctx.analysis.origin === "PLANNED" && !old)
+            throw new Error(
+              "Topic storyboards have no original source frames. Generate the planned frame images instead.",
+            );
           ctx.version.frames[ctx.segment.id] =
             old || (await KeyframeService.extract(ctx.analysis, ctx.segment));
           break;
         }
         case "generate_frames": {
           const ctx = needSegment();
+          if (ctx.analysis.origin === "PLANNED") {
+            ctx.version.frames[ctx.segment.id] =
+              await new NicheFrameService().generate(
+                ctx.analysis,
+                ctx.version,
+                ctx.segment,
+                snapshot.characters,
+                p.model || guidedDefaults().imageModel,
+                resolveRouterConnection(p.connection),
+              );
+            break;
+          }
           const frames =
             ctx.version.frames[ctx.segment.id] ||
             (await KeyframeService.extract(ctx.analysis, ctx.segment));

@@ -107,6 +107,10 @@ export class VideoAnalysisService {
     connection: RouterConnection,
     motionOnly = false,
   ): Promise<Analysis> {
+    if (analysis.origin === "PLANNED")
+      throw new Error(
+        "Generated storyboards contain planned scenes, not observed source footage. Create a new topic plan instead of analyzing the timing scaffold.",
+      );
     return OpenAIAnalysisProvider.analyze(analysis, connection, motionOnly);
   }
 }

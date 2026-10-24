@@ -1,4 +1,21 @@
 import { guidedDefaultsSchema } from "../guided";
+import { z } from "zod";
+
+export function nicheDefaults(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return z
+    .object({
+      duration: z.coerce.number().int().min(4).max(180),
+      language: z.string().trim().min(1).max(100),
+      artStyle: z.string().trim().max(3000),
+    })
+    .parse({
+      duration: env.STUDIO_DEFAULT_NICHE_DURATION || 30,
+      language: env.STUDIO_DEFAULT_NICHE_LANGUAGE || "English",
+      artStyle: env.STUDIO_DEFAULT_NICHE_ART_STYLE || "",
+    });
+}
 
 export function guidedDefaults(
   env: Record<string, string | undefined> = process.env,

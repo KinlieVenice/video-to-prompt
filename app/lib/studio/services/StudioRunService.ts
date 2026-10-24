@@ -23,6 +23,7 @@ import { KeyframeService } from "./KeyframeService";
 import { VoiceService } from "./VoiceService";
 import { ScenePlannerService } from "./ScenePlannerService";
 import { VideoAssemblyService } from "./VideoAssemblyService";
+import { NicheFrameService } from "./NicheFrameService";
 
 function fingerprint(
   analysis: Analysis,
@@ -63,6 +64,7 @@ export class StudioRunService {
   private voice: typeof VoiceService.generate;
   private assemble: typeof VideoAssemblyService.assemble;
   private inspect: typeof probe;
+  private plannedFrames: NicheFrameService;
   constructor(
     deps: {
       browser?: FlowConnection;
@@ -71,6 +73,7 @@ export class StudioRunService {
       voice?: typeof VoiceService.generate;
       assemble?: typeof VideoAssemblyService.assemble;
       probe?: typeof probe;
+      plannedFrames?: NicheFrameService;
     } = {},
   ) {
     const browser = deps.browser || new FlowBrowserService();
@@ -81,6 +84,7 @@ export class StudioRunService {
     this.assemble =
       deps.assemble || VideoAssemblyService.assemble.bind(VideoAssemblyService);
     this.inspect = deps.probe || probe;
+    this.plannedFrames = deps.plannedFrames || new NicheFrameService();
   }
   static list() {
     return listRecords<StudioRun>("runs");
@@ -118,6 +122,17 @@ export class StudioRunService {
     if (same) return same;
     if (prior.length)
       throw new Error("Pause or finish the active automatic run first.");
+    if (
+      (await FlowJobService.list()).some(
+        (job) =>
+          ["RUNNING", "SUBMITTING", "UNKNOWN"].includes(job.state) ||
+          (job.upscale &&
+            ["RUNNING", "SUBMITTING", "UNKNOWN"].includes(job.upscale.state)),
+      )
+    )
+      throw new Error(
+        "Finish or reconcile the active Flow job before starting another automatic video.",
+      );
     const { project, version, analysis, characters } = await this.context(
       projectId,
       versionId,
@@ -138,6 +153,10 @@ export class StudioRunService {
       throw new Error("Assign at least one replacement character first.");
     if (version.audioMode === "UPLOADED" && !version.uploadedAudio)
       throw new Error("Upload your recording or choose Original audio.");
+    if (analysis.origin === "PLANNED" && version.audioMode === "ORIGINAL")
+      throw new Error(
+        "Topic videos have no original soundtrack. Choose character voices, Flow audio, an uploaded recording or silent audio.",
+      );
     if (version.audioMode === "CHARACTER_TTS" && !connection.ttsEnabled)
       throw new Error(
         "Enable the 9router speech route or choose Original audio.",
@@ -290,18 +309,29 @@ export class StudioRunService {
       } else if (run.stage === "FRAMES") {
         const segment = version.segments[run.cursor];
         if (segment) {
-          const frames =
-            version.frames[segment.id] ||
-            (await KeyframeService.extract(analysis, segment));
-          version.frames[segment.id] = await this.keyframes.generate(
-            analysis,
-            version,
-            segment,
-            frames,
-            characters,
-            run.imageModel,
-            connection,
-          );
+          if (analysis.origin === "PLANNED") {
+            version.frames[segment.id] = await this.plannedFrames.generate(
+              analysis,
+              version,
+              segment,
+              characters,
+              run.imageModel,
+              connection,
+            );
+          } else {
+            const frames =
+              version.frames[segment.id] ||
+              (await KeyframeService.extract(analysis, segment));
+            version.frames[segment.id] = await this.keyframes.generate(
+              analysis,
+              version,
+              segment,
+              frames,
+              characters,
+              run.imageModel,
+              connection,
+            );
+          }
           await saveRecord("projects", project);
           run.cursor++;
           run.message = `Reference pair ${run.cursor}/${version.segments.length} saved`;

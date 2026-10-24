@@ -4,6 +4,8 @@ A local-first, character-agnostic extension of [imooooc/video-to-prompt](https:/
 
 ## Run locally
 
+The [niche generator](docs/NICHE_GENERATOR.md) saves a detailed format, art style, analyzed reference videos, character, audio and generation settings. Choose a niche, enter a topic, and create an original script, frame images, Flow clips and assembled MP4 using the existing automatic runner. Open **Niche generator** in the sidebar.
+
 New uploads use the [guided upload-to-final-video workflow](docs/GUIDED_WORKFLOW.md): choose cast/audio, skip optional background settings, then generate and assemble automatically. Edit `STUDIO_DEFAULT_*` in `.env.local` to change defaults; `.env.example` lists every setting. Dedicated signed-in Flow Chrome is required for automatic video generation. Advanced workspace retains the manual tools.
 
 Node.js 22+ is recommended. Use the committed npm lockfile:

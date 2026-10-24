@@ -64,6 +64,41 @@ export class OpenAIImageProvider implements ImageGenerationProvider {
         prompt: `Image 1 is the source composition. ${input.references.map((r, i) => `Image ${i + 2}: ${r.description}`).join(" ")} ${input.prompt}`,
       },
     );
+    return this.saveImage(response);
+  }
+  async create(input: {
+    references: { asset: string; description: string }[];
+    prompt: string;
+    model: string;
+    connection: RouterConnection;
+  }) {
+    if (!input.connection.imagesEnabled)
+      throw new Error("Enable image generation for topic videos.");
+    const images = await Promise.all(
+      input.references.map(async (ref) => {
+        const mime = ref.asset.endsWith(".jpg")
+          ? "image/jpeg"
+          : ref.asset.endsWith(".webp")
+            ? "image/webp"
+            : "image/png";
+        return `data:${mime};base64,${(await readFile(assetPath(ref.asset))).toString("base64")}`;
+      }),
+    );
+    const response = await routerRequest(
+      input.connection,
+      "images/generations",
+      {
+        model: input.model,
+        n: 1,
+        output_format: "png",
+        response_format: "b64_json",
+        ...(images.length ? { images } : {}),
+        prompt: `${input.references.map((r, i) => `Image ${i + 1}: ${r.description}`).join(" ")} ${input.prompt}`,
+      },
+    );
+    return this.saveImage(response);
+  }
+  private async saveImage(response: Response) {
     const result = await response.json();
     const encoded = result.data?.[0]?.b64_json;
     if (typeof encoded !== "string" || !encoded.length)

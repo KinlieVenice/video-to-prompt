@@ -103,6 +103,10 @@ export class VideoAssemblyService {
     version: Version,
     characters: Character[],
   ) {
+    if (analysis.origin === "PLANNED" && version.audioMode === "ORIGINAL")
+      throw new Error(
+        "Topic videos have no original soundtrack. Select character TTS, Flow clip audio, a recording or silent output.",
+      );
     if (!version.segments.length || version.planRevision !== analysis.revision)
       throw new Error("Plan segments again after editing analysis.");
     const range = reenactmentRange(analysis, version);
@@ -363,7 +367,12 @@ export class VideoAssemblyService {
       schemaVersion: 1,
       project: project.name,
       version: version.name,
-      source: { name: analysis.sourceName, duration: analysis.media.duration },
+      source: {
+        name: analysis.sourceName,
+        duration: analysis.media.duration,
+        origin: analysis.origin || "SOURCE",
+      },
+      ...(analysis.contentPlan ? { contentPlan: analysis.contentPlan } : {}),
       sourceRange: reenactmentRange(analysis, version),
       visualDirection: visualDirection(version),
       audioMode: version.audioMode,

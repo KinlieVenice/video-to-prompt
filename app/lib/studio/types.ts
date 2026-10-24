@@ -72,6 +72,8 @@ export type Turn = Interval & {
   reviewed: boolean;
 };
 export type Analysis = {
+  origin?: "SOURCE" | "PLANNED";
+  contentPlan?: import("./niche").ContentPlan;
   id: string;
   sourceAsset: string;
   sourceName: string;

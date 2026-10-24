@@ -103,11 +103,13 @@ export function SourcePanel({
           <div className="panel-heading">
             <span className="eyebrow">SOURCE FOOTAGE</span>
             <span className="badge">
-              {analysis.status === "LOCAL"
-                ? "Local scan complete"
-                : analysis.provider === "OPENAI_9ROUTER"
-                  ? "OpenAI analyzed"
-                  : "Saved analysis"}
+              {analysis.origin === "PLANNED"
+                ? "Planned storyboard"
+                : analysis.status === "LOCAL"
+                  ? "Local scan complete"
+                  : analysis.provider === "OPENAI_9ROUTER"
+                    ? "OpenAI analyzed"
+                    : "Saved analysis"}
             </span>
           </div>
           <video
@@ -146,10 +148,23 @@ export function SourcePanel({
         <section className="panel stack">
           <span className="eyebrow">01 / UNDERSTAND THE PERFORMANCE</span>
           <h2>Start with what happened.</h2>
+          {analysis.origin === "PLANNED" && (
+            <p className="notice">
+              This is an original generated script and planned timeline. The
+              black video is only a timing scaffold; no actions were observed
+              from it. Reference-video analysis is saved in the niche.
+            </p>
+          )}
           <p className="muted">
-            Cuts and audio activity are measured locally. OpenAI analyzes
-            timestamped frames through 9router. Transcription uses your selected
-            audio workflow.
+            {analysis.origin === "PLANNED" ? (
+              "The script supplies planned scenes and dialogue timing. No video observations were measured from the generated timing track."
+            ) : (
+              <>
+                Cuts and audio activity are measured locally. OpenAI analyzes
+                timestamped frames through 9router. Transcription uses your
+                selected audio workflow.
+              </>
+            )}
           </p>
           <div className="stat-grid">
             <div>
@@ -200,6 +215,7 @@ export function SourcePanel({
             className="button primary"
             disabled={
               busy ||
+              analysis.origin === "PLANNED" ||
               (analysis.status === "ANALYZED" && !contextChanged) ||
               dirty
             }
@@ -215,7 +231,7 @@ export function SourcePanel({
           {analysis.status === "ANALYZED" && (
             <button
               className="button"
-              disabled={busy || dirty}
+              disabled={busy || dirty || analysis.origin === "PLANNED"}
               onClick={() => run("refine_motion", { sourceContext })}
             >
               <Sparkles size={16} />
@@ -336,7 +352,9 @@ export function SourcePanel({
         <div className="timeline-legend">
           <span>
             <i className="dot" />
-            FFmpeg shot boundaries
+            {analysis.origin === "PLANNED"
+              ? "Scripted scene boundaries"
+              : "FFmpeg shot boundaries"}
           </span>
           <span>
             {analysis.activity.length} audio activity intervals · review music

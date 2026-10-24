@@ -36,6 +36,7 @@ import { AudioPanel } from "./AudioPanel";
 import { FlowPanel } from "./FlowPanel";
 import { ExportPanel } from "./ExportPanel";
 import { GuidedStudio } from "./GuidedStudio";
+import { NicheStudio } from "./NicheStudio";
 import {
   guidedDefaultsSchema,
   type GuidedDefaults,
@@ -46,8 +47,14 @@ export type StudioAction = (
   payload?: Record<string, unknown>,
   file?: File,
 ) => Promise<StudioResponse | undefined>;
-type Tab = "source" | "characters" | "audio" | "flow" | "export";
+type Tab = "source" | "characters" | "audio" | "flow" | "export" | "niches";
 const TABS = [
+  {
+    id: "niches" as Tab,
+    label: "Niche generator",
+    sub: "Topic to final video",
+    icon: Layers3,
+  },
   {
     id: "source" as Tab,
     label: "Source & analysis",
@@ -509,7 +516,7 @@ export function Studio() {
           {!guided && (
             <div>
               <fieldset
-                disabled={!!busy || autoActive}
+                disabled={!!busy || (autoActive && tab !== "niches")}
                 className="studio-fields"
                 aria-busy={!!busy}
               >
@@ -520,6 +527,15 @@ export function Studio() {
                   </section>
                 ) : (
                   <>
+                    {tab === "niches" && (
+                      <NicheStudio
+                        characters={data.characters}
+                        connection={connection}
+                        onRunning={setAutoActive}
+                        onCharacters={() => setTab("characters")}
+                        reload={load}
+                      />
+                    )}
                     {project && version && analysis && (
                       <>
                         <div className="project-ribbon">
@@ -607,7 +623,8 @@ export function Studio() {
                         </div>
                       </>
                     ) : (
-                      tab !== "characters" && (
+                      tab !== "characters" &&
+                      tab !== "niches" && (
                         <>
                           <section className="welcome-panel">
                             <div className="welcome-copy">

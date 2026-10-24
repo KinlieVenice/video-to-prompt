@@ -18,6 +18,8 @@ export class PromptGenerationService {
     characters: Character[],
     flow?: { resolution: "360p" | "720p"; nativeVoice: boolean },
   ): string {
+    if (analysis.origin === "PLANNED")
+      return this.planned(analysis, version, segment, characters, flow);
     const shot = analysis.shots.find((s) => s.id === segment.shotId)!;
     const turns = analysis.turns.filter(
       (t) => t.end > segment.start && t.start < segment.end,
@@ -79,5 +81,41 @@ export class PromptGenerationService {
     ]
       .filter(Boolean)
       .join("\n\n");
+  }
+  private static planned(
+    analysis: Analysis,
+    version: Version,
+    segment: Segment,
+    characters: Character[],
+    flow?: { resolution: "360p" | "720p"; nativeVoice: boolean },
+  ) {
+    const index = analysis.shots.findIndex((s) => s.id === segment.shotId);
+    const scene = analysis.contentPlan?.scenes[index];
+    if (!scene) throw new Error("Missing planned scene for topic video.");
+    const character = characters.find((c) => c.id === version.mappings.main);
+    const dialogue = analysis.turns
+      .filter((t) => t.start < segment.end && t.end > segment.start)
+      .map(
+        (t) =>
+          `${(t.start - segment.start).toFixed(2)}–${(t.end - segment.start).toFixed(2)}s: ${JSON.stringify(t.text)} (${t.emotion})`,
+      )
+      .join("\n");
+    return [
+      `Create ${segment.duration} seconds, ${version.aspect}, ${flow?.resolution || "360p"}. Model: ${version.target === "OMNI_FLASH" ? "Omni 1.1 Flash" : "Veo 3.1 Lite"}. This is an ORIGINAL scripted scene, not reenactment of observed footage.`,
+      `Character: ${character?.name}: ${character?.description}. Art style: ${analysis.contentPlan?.artStyle || character?.visualStyle}. Preserve identity while rendering in the chosen art style. Use attached identity and first/last images consistently.`,
+      `Scene: ${scene.description}. Camera: ${scene.camera}. Lighting: ${scene.lighting}. Opening: ${scene.firstFrame}. Ending: ${scene.lastFrame}.`,
+      `Motion within this continuous shot, relative to its start: ${scene.motion}. No cut within this scene.`,
+      version.visualDirection?.backgroundMode === "NEW"
+        ? `Environment override: ${version.visualDirection.backgroundPrompt}.`
+        : "Keep the planned environment shown in the attached frames.",
+      expressionInstructions(version),
+      `Dialogue, verbatim, with seconds relative to this segment:\n${dialogue || "No dialogue."}`,
+      version.audioMode === "FLOW_CLIPS"
+        ? "Generate the supplied spoken dialogue and matching mouth movements as native audio. Speak these words only; do not add commentary. No specific saved TTS voice is attached."
+        : version.audioMode === "SILENT"
+          ? "Generate silent visuals with no speech."
+          : "Match mouth movements to the supplied narration timing; the chosen final soundtrack is applied separately.",
+      `Use attached first and last images as composition endpoints. The final usable scene is ${(segment.end - segment.start).toFixed(3)} seconds; hold the final pose for remaining generated padding. Do not add text, captions, logos or extra dialogue.`,
+    ].join("\n\n");
   }
 }
