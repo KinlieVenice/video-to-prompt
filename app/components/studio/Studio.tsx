@@ -35,6 +35,11 @@ import { CharacterPanel } from "./CharacterPanel";
 import { AudioPanel } from "./AudioPanel";
 import { FlowPanel } from "./FlowPanel";
 import { ExportPanel } from "./ExportPanel";
+import { GuidedStudio } from "./GuidedStudio";
+import {
+  guidedDefaultsSchema,
+  type GuidedDefaults,
+} from "../../lib/studio/guided";
 
 export type StudioAction = (
   action: string,
@@ -89,6 +94,11 @@ export function Studio() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [workflow, setWorkflow] = useState("GUIDED");
+  const [autoActive, setAutoActive] = useState(false);
+  const [defaults, setDefaults] = useState<GuidedDefaults>(() =>
+    guidedDefaultsSchema.parse({}),
+  );
   const [saved, setSaved] = useState(true);
   const [download, setDownload] = useState<string>();
   const [ffmpegReady, setFfmpegReady] = useState(true);
@@ -107,6 +117,8 @@ export function Studio() {
       if (!response.ok)
         throw new Error(json.error || "Could not open local projects.");
       setData(json);
+      if (json.guidedDefaults) setDefaults(json.guidedDefaults);
+      setWorkflow(localStorage.getItem("studio:workflow") || "GUIDED");
       setRouterSettings(json.routerSettings);
       setConnection(loadConnection(json.routerSettings));
       setFfmpegReady(json.ffmpegReady ?? false);
@@ -261,7 +273,13 @@ export function Studio() {
     setDownload(undefined);
   };
   const onUpload = (file?: File) => {
-    if (file) void run("create_project", {}, file);
+    if (file)
+      void run("create_project", { guided: workflow === "GUIDED" }, file);
+  };
+  const guided = workflow === "GUIDED" && version?.workflow === "GUIDED";
+  const changeWorkflow = (value: string) => {
+    localStorage.setItem("studio:workflow", value);
+    setWorkflow(value);
   };
   const nav = TABS.find((t) => t.id === tab)!;
   return (
@@ -287,7 +305,7 @@ export function Studio() {
             <select
               aria-label="Current project"
               value={project?.id || ""}
-              disabled={!!busy}
+              disabled={!!busy || autoActive}
               onChange={(e) => switchProject(e.target.value)}
             >
               <option value="" disabled>
@@ -302,7 +320,7 @@ export function Studio() {
           </label>
           <button
             className="button new-project"
-            disabled={!!busy}
+            disabled={!!busy || autoActive}
             onClick={() => uploadRef.current?.click()}
           >
             <Plus size={15} />
@@ -315,9 +333,14 @@ export function Studio() {
             return (
               <button
                 key={item.id}
-                disabled={!!busy}
+                disabled={!!busy || autoActive}
                 className={tab === item.id ? "active" : ""}
-                onClick={() => setTab(item.id)}
+                onClick={() => {
+                  if (!autoActive) {
+                    changeWorkflow("ADVANCED");
+                    setTab(item.id);
+                  }
+                }}
               >
                 <Icon size={19} />
                 <span>
@@ -398,7 +421,7 @@ export function Studio() {
                 <select
                   aria-label="Current character version"
                   value={version.id}
-                  disabled={!!busy}
+                  disabled={!!busy || autoActive}
                   onChange={(e) => switchVersion(e.target.value)}
                 >
                   {project.versions.map((v) => (
@@ -409,7 +432,7 @@ export function Studio() {
                 </select>
                 <button
                   className="button"
-                  disabled={!!busy}
+                  disabled={!!busy || autoActive}
                   title="Create another character version using the same analysis"
                   onClick={() => run("duplicate_version")}
                 >
@@ -453,200 +476,235 @@ export function Studio() {
               FFMPEG_PATH and FFPROBE_PATH to your local binaries.
             </p>
           )}
-          <fieldset
-            disabled={!!busy}
-            className="studio-fields"
-            aria-busy={!!busy}
-          >
-            {!loaded ? (
-              <section className="panel empty-workspace">
-                <Loader2 size={26} className="animate-spin" />
-                <p>Opening your local studio…</p>
-              </section>
-            ) : (
-              <>
-                {project && version && analysis && (
-                  <>
-                    <div className="project-ribbon">
-                      <span className="badge">{analysis.sourceName}</span>
-                      <span>
-                        {seconds(selectedRange!.end - selectedRange!.start)}{" "}
-                        output · source {seconds(selectedRange!.start)}–
-                        {seconds(selectedRange!.end)}
-                      </span>
-                      <span>
-                        Full source {seconds(analysis.media.duration)} ·{" "}
-                        {analysis.shots.length} shots
-                      </span>
-                      <label>
-                        Version name
-                        <input
-                          value={version.name}
-                          onChange={(e) =>
-                            updateVersion({ name: e.target.value })
-                          }
-                        />
-                      </label>
-                      <button
-                        className="button small-button"
-                        disabled={!!busy || saved}
-                        onClick={() => run("save_version")}
-                      >
-                        <Check size={13} />
-                        {saved ? "Version saved" : "Save version settings"}
-                      </button>
-                    </div>
-                    <div hidden={tab !== "source"}>
-                      <SourcePanel
-                        key={`${analysis.id}-${analysis.revision}`}
-                        analysis={analysis}
-                        version={version}
-                        run={run}
-                        busy={!!busy}
-                      />
-                    </div>
-                  </>
-                )}
-                <div hidden={tab !== "characters"}>
-                  <CharacterPanel
-                    characters={data.characters}
-                    analysis={analysis}
-                    version={version}
-                    updateVersion={updateVersion}
-                    run={run}
-                    busy={!!busy}
-                  />
-                </div>
-                {project && version && analysis ? (
-                  <>
-                    <div hidden={tab !== "audio"}>
-                      <AudioPanel
-                        analysis={analysis}
-                        version={version}
-                        characters={data.characters}
-                        updateVersion={updateVersion}
-                        run={run}
-                        busy={!!busy}
-                      />
-                    </div>
-                    <div hidden={tab !== "flow"}>
-                      <FlowPanel
-                        projectId={project!.id}
-                        onImported={load}
-                        analysis={analysis}
-                        version={version}
-                        characters={data.characters}
-                        updateVersion={updateVersion}
-                        run={run}
-                        busy={!!busy}
-                      />
-                    </div>
-                    <div hidden={tab !== "export"}>
-                      <ExportPanel
-                        analysis={analysis}
-                        version={version}
-                        updateVersion={updateVersion}
-                        run={run}
-                        busy={!!busy}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  tab !== "characters" && (
-                    <>
-                      <section className="welcome-panel">
-                        <div className="welcome-copy">
-                          <span className="eyebrow">
-                            THE PERFORMANCE IS THE BLUEPRINT.
-                          </span>
-                          <h2>
-                            Same scene.
-                            <br />A whole new cast<span>.</span>
-                          </h2>
-                          <p>
-                            Turn a reference video into a reusable reenactment.
-                            Analyze the action, cast your characters, keep the
-                            dialogue, and bring it all together.
-                          </p>
-                          <div className="welcome-tags">
-                            <span>Any character</span>
-                            <span>Original audio first</span>
-                            <span>Manual Google Flow</span>
-                          </div>
-                        </div>
-                        <div className="welcome-visual" aria-hidden="true">
-                          <div className="frame-outline frame-back" />
-                          <div className="frame-outline frame-front">
-                            <span>SCENE 01 / TAKE 02</span>
-                            <Clapperboard size={64} strokeWidth={1} />
-                            <div className="frame-footer">
-                              <span className="record-dot" />
-                              REIMAGINE THE CAST<span>00:00:08</span>
-                            </div>
-                          </div>
-                          <div className="visual-caption">
-                            YOUR SOURCE. YOUR CHARACTERS.
-                          </div>
-                        </div>
-                      </section>
-                      <label
-                        className={`upload-zone ${busy ? "disabled" : ""}`}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          if (!busy) onUpload(e.dataTransfer.files[0]);
-                        }}
-                      >
-                        <div className="upload-icon">
-                          <Upload size={24} />
-                        </div>
-                        <h3>Drop your source video here</h3>
-                        <span>or click to browse your files</span>
-                        <small>
-                          MP4 or MOV · up to 512 MB / 10 minutes · local scan
-                          first
-                        </small>
-                        <input
-                          disabled={!!busy}
-                          type="file"
-                          accept=".mp4,.mov"
-                          onChange={(e) => {
-                            onUpload(e.target.files?.[0]);
-                            e.target.value = "";
-                          }}
-                        />
-                      </label>
-                      <div className="workflow-cards">
-                        {[
-                          {
-                            n: "01",
-                            title: "Analyze once",
-                            text: "Measured scene cuts, speaker turns and a correctable transcript.",
-                          },
-                          {
-                            n: "02",
-                            title: "Recast endlessly",
-                            text: "Reusable characters, reference images and saved voices.",
-                          },
-                          {
-                            n: "03",
-                            title: "Make the final cut",
-                            text: "Manual Flow generation. Local FFmpeg assembly.",
-                          },
-                        ].map((item) => (
-                          <div key={item.n}>
-                            <span>{item.n}</span>
-                            <h3>{item.title}</h3>
-                            <p>{item.text}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )
-                )}
-              </>
+          {project &&
+            version?.workflow === "GUIDED" &&
+            analysis &&
+            !guided &&
+            !busy &&
+            !autoActive && (
+              <button
+                className="button"
+                onClick={() => changeWorkflow("GUIDED")}
+              >
+                Open guided setup
+              </button>
             )}
-          </fieldset>
+          {guided && project && version && analysis && (
+            <GuidedStudio
+              key={`${project.id}-${version.id}`}
+              projectId={project.id}
+              analysis={analysis}
+              version={version}
+              characters={data.characters}
+              defaults={defaults}
+              connection={connection}
+              updateVersion={updateVersion}
+              run={run}
+              busy={!!busy}
+              reload={load}
+              onRunning={setAutoActive}
+              onAdvanced={() => changeWorkflow("ADVANCED")}
+            />
+          )}
+          {!guided && (
+            <div>
+              <fieldset
+                disabled={!!busy || autoActive}
+                className="studio-fields"
+                aria-busy={!!busy}
+              >
+                {!loaded ? (
+                  <section className="panel empty-workspace">
+                    <Loader2 size={26} className="animate-spin" />
+                    <p>Opening your local studio…</p>
+                  </section>
+                ) : (
+                  <>
+                    {project && version && analysis && (
+                      <>
+                        <div className="project-ribbon">
+                          <span className="badge">{analysis.sourceName}</span>
+                          <span>
+                            {seconds(selectedRange!.end - selectedRange!.start)}{" "}
+                            output · source {seconds(selectedRange!.start)}–
+                            {seconds(selectedRange!.end)}
+                          </span>
+                          <span>
+                            Full source {seconds(analysis.media.duration)} ·{" "}
+                            {analysis.shots.length} shots
+                          </span>
+                          <label>
+                            Version name
+                            <input
+                              value={version.name}
+                              onChange={(e) =>
+                                updateVersion({ name: e.target.value })
+                              }
+                            />
+                          </label>
+                          <button
+                            className="button small-button"
+                            disabled={!!busy || saved}
+                            onClick={() => run("save_version")}
+                          >
+                            <Check size={13} />
+                            {saved ? "Version saved" : "Save version settings"}
+                          </button>
+                        </div>
+                        <div hidden={tab !== "source"}>
+                          <SourcePanel
+                            key={`${analysis.id}-${analysis.revision}`}
+                            analysis={analysis}
+                            version={version}
+                            run={run}
+                            busy={!!busy}
+                          />
+                        </div>
+                      </>
+                    )}
+                    <div hidden={tab !== "characters"}>
+                      <CharacterPanel
+                        characters={data.characters}
+                        analysis={analysis}
+                        version={version}
+                        updateVersion={updateVersion}
+                        run={run}
+                        busy={!!busy}
+                      />
+                    </div>
+                    {project && version && analysis ? (
+                      <>
+                        <div hidden={tab !== "audio"}>
+                          <AudioPanel
+                            analysis={analysis}
+                            version={version}
+                            characters={data.characters}
+                            updateVersion={updateVersion}
+                            run={run}
+                            busy={!!busy}
+                          />
+                        </div>
+                        <div hidden={tab !== "flow"}>
+                          <FlowPanel
+                            projectId={project!.id}
+                            onImported={load}
+                            analysis={analysis}
+                            version={version}
+                            characters={data.characters}
+                            updateVersion={updateVersion}
+                            run={run}
+                            busy={!!busy}
+                          />
+                        </div>
+                        <div hidden={tab !== "export"}>
+                          <ExportPanel
+                            analysis={analysis}
+                            version={version}
+                            updateVersion={updateVersion}
+                            run={run}
+                            busy={!!busy}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      tab !== "characters" && (
+                        <>
+                          <section className="welcome-panel">
+                            <div className="welcome-copy">
+                              <span className="eyebrow">
+                                THE PERFORMANCE IS THE BLUEPRINT.
+                              </span>
+                              <h2>
+                                Same scene.
+                                <br />A whole new cast<span>.</span>
+                              </h2>
+                              <p>
+                                Turn a reference video into a reusable
+                                reenactment. Analyze the action, cast your
+                                characters, keep the dialogue, and bring it all
+                                together.
+                              </p>
+                              <div className="welcome-tags">
+                                <span>Any character</span>
+                                <span>Original audio first</span>
+                                <span>Manual Google Flow</span>
+                              </div>
+                            </div>
+                            <div className="welcome-visual" aria-hidden="true">
+                              <div className="frame-outline frame-back" />
+                              <div className="frame-outline frame-front">
+                                <span>SCENE 01 / TAKE 02</span>
+                                <Clapperboard size={64} strokeWidth={1} />
+                                <div className="frame-footer">
+                                  <span className="record-dot" />
+                                  REIMAGINE THE CAST<span>00:00:08</span>
+                                </div>
+                              </div>
+                              <div className="visual-caption">
+                                YOUR SOURCE. YOUR CHARACTERS.
+                              </div>
+                            </div>
+                          </section>
+                          <label
+                            className={`upload-zone ${busy ? "disabled" : ""}`}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              if (!busy) onUpload(e.dataTransfer.files[0]);
+                            }}
+                          >
+                            <div className="upload-icon">
+                              <Upload size={24} />
+                            </div>
+                            <h3>Drop your source video here</h3>
+                            <span>or click to browse your files</span>
+                            <small>
+                              MP4 or MOV · up to 512 MB / 10 minutes · local
+                              scan first
+                            </small>
+                            <input
+                              disabled={!!busy || autoActive}
+                              type="file"
+                              accept=".mp4,.mov"
+                              onChange={(e) => {
+                                onUpload(e.target.files?.[0]);
+                                e.target.value = "";
+                              }}
+                            />
+                          </label>
+                          <div className="workflow-cards">
+                            {[
+                              {
+                                n: "01",
+                                title: "Analyze once",
+                                text: "Measured scene cuts, speaker turns and a correctable transcript.",
+                              },
+                              {
+                                n: "02",
+                                title: "Recast endlessly",
+                                text: "Reusable characters, reference images and saved voices.",
+                              },
+                              {
+                                n: "03",
+                                title: "Make the final cut",
+                                text: "Manual Flow generation. Local FFmpeg assembly.",
+                              },
+                            ].map((item) => (
+                              <div key={item.n}>
+                                <span>{item.n}</span>
+                                <h3>{item.title}</h3>
+                                <p>{item.text}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )
+                    )}
+                  </>
+                )}
+              </fieldset>
+            </div>
+          )}
           <footer className="workspace-footer">
             <span>
               <span className="status-dot" />

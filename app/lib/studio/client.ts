@@ -1,6 +1,7 @@
 import type { StudioState } from "./types";
 import type { PublicRouterSettings } from "./connection";
 export type StudioResponse = StudioState & {
+  guidedDefaults?: import("./guided").GuidedDefaults;
   error?: string;
   asset?: string;
   projectId?: string;

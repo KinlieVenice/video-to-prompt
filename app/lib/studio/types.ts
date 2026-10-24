@@ -153,6 +153,7 @@ export type VisualDirection = {
   completeScene?: boolean;
 };
 export type Version = {
+  workflow?: "GUIDED";
   id: string;
   name: string;
   sourceRange?: Interval;

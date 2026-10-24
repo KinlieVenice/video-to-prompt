@@ -1,3 +1,7 @@
+import {
+  flowContext,
+  currentFlowContext,
+} from "../../../lib/studio/services/FlowContextService";
 import { z } from "zod";
 import { localRequest } from "../../../lib/studio/server/http";
 import {
@@ -5,21 +9,17 @@ import {
   getRecord,
   saveRecord,
   listRecords,
-  signature,
   assetPath,
 } from "../../../lib/studio/server/store";
 import { FlowBrowserService } from "../../../lib/studio/services/FlowBrowserService";
 import { FlowJobService } from "../../../lib/studio/services/FlowJobService";
-import { PromptGenerationService } from "../../../lib/studio/services/PromptGenerationService";
 import {
   flowInputSchema,
   flowSettingsSchema,
   type FlowJob,
   type FlowSettings,
 } from "../../../lib/studio/flow";
-import type { Analysis, Character, Project } from "../../../lib/studio/types";
 import { probe } from "../../../lib/studio/server/ffmpeg";
-import { referenceLinkCurrent } from "../../../lib/studio/references";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,95 +59,13 @@ function fail(error: unknown) {
     { status: 400, headers: { "Cache-Control": "no-store" } },
   );
 }
-async function context(
+const context = (
   projectId: string,
   versionId: string,
   segmentId: string,
   settings?: FlowSettings,
-) {
-  const project = await getRecord<Project>("projects", projectId);
-  const version = project.versions.find((v) => v.id === versionId);
-  const analysis = await getRecord<Analysis>("analyses", project.analysisId);
-  const segment = version?.segments.find((s) => s.id === segmentId);
-  if (!version || !segment || version.planRevision !== analysis.revision)
-    throw new Error(
-      "Select a current planned segment. Save changes and replan if needed.",
-    );
-  if (!["FRAMES", "FIRST_LAST", "INGREDIENTS"].includes(segment.strategy))
-    throw new Error(
-      "This bridge supports Frames, First + last and Ingredients. Use the manual workspace for other strategies.",
-    );
-  const characters = await listRecords<Character>("characters");
-  if (!referenceLinkCurrent(version, segment))
-    throw new Error(
-      "The preceding reference changed. Regenerate this segment's references before preparing or importing Flow output.",
-    );
-  const frames = version.frames[segmentId]?.generated;
-  const selected = flowSettingsSchema.parse(
-    settings ||
-      version.flowSettings || {
-        resolution: version.target === "VEO_LITE" ? "720p" : "360p",
-      },
-  );
-  if (!selected.projectUrl) {
-    const connected = await browser.status();
-    if (!connected.projectUrl) throw new Error(connected.message);
-    selected.projectUrl = connected.projectUrl;
-  }
-  const input = flowInputSchema.parse({
-    prompt: PromptGenerationService.generate(
-      analysis,
-      version,
-      segment,
-      characters,
-      {
-        resolution: selected.resolution,
-        nativeVoice: Boolean(selected.voiceName),
-      },
-    ),
-    model: version.target,
-    mode: segment.strategy,
-    duration: segment.duration,
-    aspect: version.aspect,
-    first: frames?.first,
-    last: frames?.last,
-    references: characters
-      .filter((c) => Object.values(version.mappings).includes(c.id))
-      .flatMap((c) => c.references)
-      .slice(0, 6),
-    settings: selected,
-  });
-  return {
-    project,
-    version,
-    segment,
-    input,
-    binding: {
-      projectId,
-      versionId,
-      segmentId,
-      signature: signature({
-        revision: analysis.revision,
-        source: analysis.sourceHash,
-        input,
-      }),
-    },
-  };
-}
-async function current(job: FlowJob) {
-  if (!job.binding) return;
-  const ctx = await context(
-    job.binding.projectId,
-    job.binding.versionId,
-    job.binding.segmentId,
-    job.input.settings,
-  );
-  if (ctx.binding.signature !== job.binding.signature)
-    throw new Error(
-      "This Flow job belongs to an older source, cast, prompt or reference set. Prepare a new job for the current version.",
-    );
-  return ctx;
-}
+) => flowContext(browser, projectId, versionId, segmentId, settings);
+const current = (job: FlowJob) => currentFlowContext(browser, job);
 export async function GET(request: Request) {
   try {
     localRequest(request);

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { guidedVersion } from "../../lib/studio/guided";
+import { guidedDefaults } from "../../lib/studio/server/guidedDefaults";
 import { z } from "zod";
 import { stat } from "node:fs/promises";
 import {
@@ -61,6 +63,7 @@ const payloadSchema = z.object({
   model: z.string().trim().max(200).optional(),
   value: z.unknown().optional(),
   regenerate: z.boolean().optional(),
+  guided: z.boolean().optional(),
   name: z.string().max(200).optional(),
   sourceContext: sourceContextSchema.optional(),
   role: z.enum(["uploadedAudio", "backgroundAudio"]).optional(),
@@ -93,6 +96,7 @@ export async function GET(request: Request) {
         ...(await state()),
         ffmpegReady: ffmpegReady && ffprobeReady,
         routerSettings: publicRouterSettings(),
+        guidedDefaults: guidedDefaults(),
       },
       { headers: { "Cache-Control": "no-store" } },
     );
@@ -196,7 +200,11 @@ export async function POST(request: Request) {
             id: randomUUID(),
             name: uploaded.name.replace(/\.[^.]+$/, ""),
             analysisId: inspected.id,
-            versions: [newVersion(randomUUID())],
+            versions: [
+              p.guided
+                ? guidedVersion(randomUUID(), guidedDefaults())
+                : newVersion(randomUUID()),
+            ],
             updatedAt: new Date().toISOString(),
           };
           result = { projectId: project.id };

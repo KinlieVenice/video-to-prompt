@@ -4,6 +4,8 @@ A local-first, character-agnostic extension of [imooooc/video-to-prompt](https:/
 
 ## Run locally
 
+New uploads use the [guided upload-to-final-video workflow](docs/GUIDED_WORKFLOW.md): choose cast/audio, skip optional background settings, then generate and assemble automatically. Edit `STUDIO_DEFAULT_*` in `.env.local` to change defaults; `.env.example` lists every setting. Dedicated signed-in Flow Chrome is required for automatic video generation. Advanced workspace retains the manual tools.
+
 Node.js 22+ is recommended. Use the committed npm lockfile:
 
 ```sh

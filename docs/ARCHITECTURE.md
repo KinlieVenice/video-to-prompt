@@ -10,6 +10,7 @@ This is a single-user Next.js Node application. This branch uses OpenAI-compatib
   characters/<id>.json     Appearance, references, provider/model/voice/settings
   projects/<id>.json       Analysis ID plus independent reenactment versions
   flow-jobs/<id>.json      Immutable job inputs, live quote, generation/upscale state and saved result IDs
+  runs/<id>.json           Guided run stage, credit reservations, Flow job references and final output
   cache/<hash>.json        Source, transcription, visual, TTS and image reuse indexes
   assets/<uuid>.<ext>      Original media, takes, frames, clips, packages, exports
 ```
@@ -21,6 +22,8 @@ Reuploading identical source bytes reuses the source analysis. Multiple projects
 The browser stores the 9router connection, transcript mode, optional route switches and last project ID. Non-empty `NINE_ROUTER_BASE_URL`, `NINE_ROUTER_API_KEY` and `NINE_ROUTER_MODEL` server environment variables override browser connection values. The environment key never leaves the server for the browser; GET returns only a configured flag plus the public URL/model. Browser keys, when used, are forwarded only for provider actions and model discovery. Keys are not saved in project JSON, manifests or assets. Old Gemini credentials are not migrated. Visual analysis sends sampled frames and transcript context through 9router; optional image and speech actions send their own inputs through the router. Base URLs must use loopback HTTP(S) without embedded credentials, queries or fragments, and redirects are rejected. Provider error bodies are not reflected in the UI because they can echo media or credentials. Project storage is local, not a promise that AI analysis works offline.
 
 ## Service boundaries
+
+`StudioRunService` coordinates the guided path via local `/api/studio/runs` requests: saved audio, replacement references, Flow jobs, downloads/imports and final FFmpeg assembly. `FlowContextService` shares binding/current-input checks between manual and automatic generation. Version `workflow: GUIDED` receives validated environment defaults at creation; legacy projects are unchanged. The guided page schedules one advance at a time and can pause/resume saved runs. Credentials are transient request context. See [guided workflow](GUIDED_WORKFLOW.md) for defaults and recovery limits.
 
 Optional `Analysis.sourceContext` stores the user's description of the original footage, independently of cast and creative direction. Saving it is local and leaves the current analysis and plans intact. Initial analysis, motion refinement, and an explicit analysis update pass it as unverified context to every visual window; evidence takes precedence and optional model `contextNotes` become review warnings. Cache keys include the normalized description. `analyzedSourceContext` records the description used by the last successful run, so edits allow updating an already analyzed source without silently reusing the old result. Successful updates advance the analysis revision and require replanning, preserving transcript corrections and reviewed motion beats. Other projects sharing the source analysis also share its description.
 

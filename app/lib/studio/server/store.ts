@@ -16,7 +16,7 @@ export const root = () =>
     process.env.STUDIO_DATA_DIR || path.join(process.cwd(), ".studio"),
   );
 type Collection =
-  "analyses" | "characters" | "projects" | "cache" | "flow-jobs";
+  "analyses" | "characters" | "projects" | "cache" | "flow-jobs" | "runs";
 export function validId(id: string) {
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id)) throw new Error("Invalid record ID.");
   return id;

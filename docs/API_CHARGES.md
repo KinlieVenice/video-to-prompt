@@ -39,6 +39,8 @@ Retries, multiple outputs and some upscaling operations can add cost. Ultra lowe
 
 ## Experimental Flow browser test
 
+The [guided workflow](GUIDED_WORKFLOW.md) can now run preparation, generation, downloads and assembly automatically after one final Generate action. It reserves the live quote for each clip against a user-selected total Flow credit limit before submission; unclear outcomes pause without automatic paid retries. Reference image requests and selected TTS requests are separately charged or quota-limited through 9router. Skipping optional setup does not waive these generation charges. Closing the page stops scheduling further steps; saved results remain reusable. Implementation validation uses fake providers and spends no additional Flow credits.
+
 The local bridge separates **Prepare** from **Generate**. Preparing uploads references and reads the live account quote without submitting video generation. Generate submits one output only after the operator selects the quoted credit amount; changed quotes and drafts fail before submission. Refresh, download and import do not request another generation. An uncertain submission is not automatically retried. Upscale only submits if live model pricing confirms zero cost; cached results are reused.
 
 **Generated clip audio** uses local FFmpeg and preserves imported Flow audio without a TTS call. **Original** remains the default for the source soundtrack. The additional implementation smoke tests prepared first/last and voice drafts and downloaded the existing diagnostic outputs; they spent no additional Flow credits. The new adapter's charged submission path has not been live-tested with a fresh generation.

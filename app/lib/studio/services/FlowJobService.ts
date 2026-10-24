@@ -136,6 +136,26 @@ export class FlowJobService {
     }
     return this.save(job);
   }
+  async restoreDraft(id: string) {
+    const job = await FlowJobService.get(id);
+    if (job.state !== "PREPARED")
+      throw new Error("Only an unsubmitted draft can be prepared again.");
+    if (
+      (await FlowJobService.list()).some(
+        (other) =>
+          other.id !== id &&
+          (active(other.state) ||
+            (other.upscale && active(other.upscale.state))),
+      )
+    )
+      throw new Error(
+        "Reconcile the other active Flow job before restoring this draft.",
+      );
+    Object.assign(job, await this.driver.prepare(job.input), {
+      error: undefined,
+    });
+    return this.save(job);
+  }
   async refresh(id: string) {
     const job = await FlowJobService.get(id);
     if (job.state === "SUBMITTING") {

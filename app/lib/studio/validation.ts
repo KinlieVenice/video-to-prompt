@@ -106,6 +106,7 @@ export const characterSchema = z.object({
   updatedAt: z.string(),
 });
 export const versionEditSchema = z.object({
+  workflow: z.literal("GUIDED").optional(),
   flowSettings: flowSettingsSchema.optional(),
   name: z.string().trim().min(1).max(200),
   sourceRange: z.object(range).optional(),
