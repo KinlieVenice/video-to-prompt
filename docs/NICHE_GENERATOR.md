@@ -1,5 +1,27 @@
 # Reusable niche generator
 
+## Optional hooks, examples and source material
+
+Every niche can work without reference videos or scripts. In **Create niche / Edit niche**, the optional **Opening hook** dropdown offers Automatic, Direct question, Curiosity/open loop, Relatable feeling/problem, Start in the action, Unexpected contrast, Result/benefit first, Numbered takeaways, Visual reveal and Custom. Custom accepts an opening line, template or instructions that the planner adapts to each topic and language. Automatic preserves topic-only use. These are reusable formats, not a live trend ranking or a promise of virality.
+
+When a video is uploaded, it is the **main format reference** for structure, pacing, camera, delivery and visual storytelling; scripts become secondary examples for tone, wording and ending. The first uploaded video is main by default. With multiple videos, **Use as main reference** changes their priority without rerunning analysis. Removing the main reference promotes the next one. Without videos, the description and optional scripts supply the main format guidance. Explicit character, art style, length, language, hook and storytelling settings still take precedence over reference suggestions; source material supplies facts rather than style examples.
+
+The categories synthesize [TikTok's hook examples](https://ads.tiktok.com/business/creativecenter/quicktok/online/creative_tips_travel/pc/en), [TikTok's hook/body/close guidance](https://ads.tiktok.com/business/en/blog/creative-best-practices-top-performing-ads), and [YouTube's immediate intrigue and payoff guidance](https://blog.youtube/creator-and-artist-stories/youtube-shorts-deep-dive/), checked 25 October 2026. Dropdown examples are original. Question, list and benefit categories are directly discussed by TikTok; relatable, contrast, cold-open and visual-reveal options are our practical applications of those broader attention/storytelling principles, rather than platform rankings. The opening must fit the allocated scene budget and its payoff must appear in the video.
+
+Expand **Optional scripts, sources and storytelling** to supply any of:
+
+- **Sample scripts**: paste examples, or import UTF-8 `.txt` / `.md` files (256 KB per file, 24,000 combined characters). Imports append editable text and make no model request. Save the niche to persist it. Scripts guide delivery and structure rather than supplying words or facts to copy.
+- **What to learn from examples**: direction for both scripts and reference videos, such as short sentences, a curious opening or gentle delivery.
+- **Story structure**: any reusable format, such as problem → demonstration → result, or hook → story → reflection → comfort.
+- **Ending guidance**: comfort, practical advice, a reveal, a question, or another finish that fits the niche.
+- **Source reference** and **Source material**: source titles, notes, product details, historical material, passages or facts to ground content. Reference labels/URLs are not fetched or verified. Paste relevant source text and put per-topic details in Topic. These fields apply to any niche; there are no mandatory religious inputs.
+
+Saved fields are included in the planning request, its cache key and each topic's frozen niche snapshot. Changing them affects future topics without repeating video analysis. Large examples increase text-provider input usage.
+
+Enable **Review script before generating media** to stop after text planning. Review cards open automatically, support narration and scene/frame edits, and enforce scene count and spoken-word budgets. Save edits, then choose **Approve & generate video**. Saved edits update the actual narration, motion and frame plan used by the runner. Reload restores pending reviews. No speech/image/Flow generation starts from Create video in this mode; text planning still uses the configured provider. Once generation has started, use a new topic video for script changes. Leave review unchecked to retain automatic assembly. This is an optional content review, not automatic fact verification.
+
+## Basic workflow
+
 Open **Niche generator** in the sidebar, then **Create niche**. Save:
 
 - A name and detailed brief: audience, hook, tone, structure, pacing, ending and exclusions.
@@ -53,4 +75,4 @@ Automated tests use fake language/image/Flow providers and real FFmpeg for a com
 
 ## Local API
 
-`GET /api/studio/niches` returns niche templates, reference analyses, topic records and public defaults. `POST` uses multipart `FormData` with a JSON `payload` and optional `file`. Actions: `save`, `upload_reference`, `analyze_reference`, `upload_audio`, `create_video` and `start_video`. Topic creation requires `nicheId`, `topic` and a UUID `requestId`; the same request ID returns the same planned project/run. `start_video` starts an already saved storyboard by `videoId`. Run progress continues through `/api/studio/runs`. All endpoints retain local host/origin checks and the serialized write queue.
+`GET /api/studio/niches` returns niche templates, reference analyses, topic records and public defaults. `POST` uses multipart `FormData` with a JSON `payload` and optional `file`. Actions: `save`, `upload_reference`, `analyze_reference`, `upload_audio`, `create_video`, `save_plan` and `start_video`. Topic creation requires `nicheId`, `topic` and a UUID `requestId`; the same request ID returns the same planned project/run. With `storytelling.reviewBeforeGeneration`, `create_video` returns `{video}` without starting a run. `save_plan` accepts `videoId` and `value: ContentPlan` for unstarted storyboards; `start_video` approves/starts the saved storyboard by `videoId`. Run progress continues through `/api/studio/runs`. All endpoints retain local host/origin checks and the serialized write queue.

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { guidedDefaultsSchema } from "./guided";
 import { flowCredits } from "./services/ScenePlannerService";
+import { nicheStorySchema } from "./niche-story";
 
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/);
 export const nicheSchema = z.object({
@@ -8,6 +9,7 @@ export const nicheSchema = z.object({
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().min(10).max(12000),
   artStyle: z.string().trim().max(3000).default(""),
+  storytelling: nicheStorySchema.optional(),
   duration: z.number().int().min(4).max(180),
   language: z.string().trim().min(1).max(100),
   characterId: id,

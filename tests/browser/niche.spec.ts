@@ -14,6 +14,261 @@ import {
   type NicheVideo,
 } from "../../app/lib/studio/niche";
 
+test("niche scripts and custom hooks work without videos, survive reload and wait for edited script approval", async ({
+  page,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("studio:workflow", "ADVANCED"),
+  );
+  const character = {
+    id: randomUUID(),
+    name: "Any niche presenter",
+    description: "A saved presenter",
+    visualStyle: "Illustrated",
+    references: [],
+    voice: defaultVoice(),
+    updatedAt: new Date().toISOString(),
+  };
+  let niches: Niche[] = [],
+    videos: NicheVideo[] = [],
+    run: StudioRun | undefined;
+  let scripts = 0,
+    saves = 0,
+    approvals = 0,
+    advances = 0;
+  await page.route("**/api/studio", (route) =>
+    route.fulfill({
+      json: {
+        projects: [],
+        analyses: [],
+        characters: [character],
+        ffmpegReady: true,
+      },
+    }),
+  );
+  await page.route("**/api/studio/niches", async (route) => {
+    if (route.request().method() === "GET")
+      return route.fulfill({
+        json: {
+          niches,
+          videos,
+          references: [],
+          defaults: guidedDefaultsSchema.parse({}),
+        },
+      });
+    const raw = route.request().postData() || "";
+    const body = JSON.parse(
+      raw.match(/name="payload"\r\n\r\n([\s\S]*?)\r\n--/)?.[1] || "{}",
+    );
+    if (body.action === "save") {
+      niches = [nicheSchema.parse(body.value)];
+      return route.fulfill({ json: { niche: niches[0] } });
+    }
+    if (body.action === "create_video") {
+      scripts++;
+      expect(niches[0].referenceIds).toEqual([]);
+      expect(niches[0].storytelling?.sampleScripts).toContain(
+        "A useful sample script.",
+      );
+      expect(niches[0].storytelling?.customHook).toBe(
+        "Open with one intriguing object.",
+      );
+      const now = new Date().toISOString();
+      const scene = {
+        description: "The presenter demonstrates an object",
+        firstFrame: "A blue object",
+        lastFrame: "The same object opened",
+        camera: "Fixed",
+        lighting: "Soft",
+        motion: "Open the object",
+        narration: "One object can explain this idea.",
+        emotion: "Curious",
+      };
+      videos = [
+        {
+          id: body.requestId,
+          nicheId: niches[0].id,
+          topic: body.topic,
+          nicheSnapshot: structuredClone(niches[0]),
+          state: "READY",
+          referenceRevisions: [],
+          projectId: "planned-project",
+          versionId: "planned-version",
+          createdAt: now,
+          updatedAt: now,
+          plan: {
+            title: "Product story",
+            hook: scene.narration,
+            summary: "A useful story",
+            artStyle: "",
+            scenes: [
+              scene,
+              { ...scene, narration: "Try this small step today." },
+            ],
+          },
+        },
+      ];
+      return route.fulfill({ json: { video: videos[0] } });
+    }
+    if (body.action === "save_plan") {
+      saves++;
+      videos[0].plan = body.value;
+      videos[0].updatedAt = new Date().toISOString();
+      return route.fulfill({ json: { video: videos[0] } });
+    }
+    if (body.action === "start_video") {
+      approvals++;
+      expect(videos[0].plan?.scenes[0].narration).toBe(
+        "An edited opening for this topic.",
+      );
+      const now = new Date().toISOString();
+      run = {
+        id: randomUUID(),
+        projectId: "planned-project",
+        versionId: "planned-version",
+        fingerprint: "saved",
+        state: "PAUSED",
+        stage: "AUDIO",
+        cursor: 0,
+        jobs: {},
+        reservations: {},
+        maxCredits: 24,
+        imageModel: niches[0].defaults.imageModel,
+        message: "Approved storyboard ready for media",
+        createdAt: now,
+        updatedAt: now,
+      };
+      videos[0].runId = run.id;
+      return route.fulfill({ json: { video: videos[0], run } });
+    }
+    return route.fulfill({ status: 400, json: { error: "Unexpected action" } });
+  });
+  await page.route("**/api/studio/runs", (route) => {
+    if (route.request().method() !== "GET") advances++;
+    return route.fulfill({ json: { runs: run ? [run] : [] } });
+  });
+  const open = async () => {
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: /Niche generator Topic to final video/ })
+      .click();
+  };
+  await open();
+  await page.getByRole("button", { name: "Create niche", exact: true }).click();
+  await page
+    .getByLabel("Niche name", { exact: true })
+    .fill("Useful product stories");
+  await page
+    .getByLabel("Detailed niche description", { exact: true })
+    .fill("Tell short useful product stories with a practical ending.");
+  await page
+    .getByLabel("Whole video length (seconds)", { exact: true })
+    .fill("16");
+  await page
+    .getByLabel("Character to use", { exact: true })
+    .selectOption(character.id);
+  await page
+    .getByLabel("Niche audio", { exact: true })
+    .selectOption("FLOW_CLIPS");
+  const hook = page.getByRole("combobox", {
+    name: "Opening hook (optional)",
+    exact: true,
+  });
+  await expect(hook.locator("option")).toHaveCount(10);
+  await hook.selectOption("QUESTION");
+  await expect(
+    page.getByRole("textbox", { name: "Custom hook (optional)", exact: true }),
+  ).toHaveCount(0);
+  await hook.selectOption("CUSTOM");
+  await page
+    .getByRole("textbox", { name: "Custom hook (optional)", exact: true })
+    .fill("Open with one intriguing object.");
+  await page
+    .getByText("Optional scripts, sources and storytelling", { exact: true })
+    .click();
+  await page.getByLabel("Import sample script", { exact: true }).setInputFiles({
+    name: "sample.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("A useful sample script."),
+  });
+  await expect(
+    page.getByRole("textbox", {
+      name: "Sample scripts (optional)",
+      exact: true,
+    }),
+  ).toHaveValue(/A useful sample script\./);
+  await page
+    .getByLabel("What to learn from examples (optional)", { exact: true })
+    .fill("Short sentences and practical advice");
+  await page
+    .getByLabel("Story structure (optional)", { exact: true })
+    .fill("Hook, explanation, takeaway");
+  await page
+    .getByLabel("Ending guidance (optional)", { exact: true })
+    .fill("One small practical step");
+  await page
+    .getByLabel("Source reference (optional)", { exact: true })
+    .fill("Product notes");
+  await page
+    .getByLabel("Source material (optional)", { exact: true })
+    .fill("The object is blue.");
+  await page
+    .getByLabel("Review script before generating media (optional)", {
+      exact: true,
+    })
+    .check();
+  await page.getByRole("button", { name: "Save niche", exact: true }).click();
+  await page
+    .getByLabel("Topic", { exact: true })
+    .fill("A practical everyday idea");
+  await page
+    .getByRole("button", { name: "Create script for review", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Review script before media generation",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(scripts).toBe(1);
+  expect(approvals).toBe(0);
+  expect(advances).toBe(0);
+  await open();
+  await expect(
+    page.getByRole("heading", {
+      name: "Review script before media generation",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Narration · scene 1", exact: true })
+    .fill("word ".repeat(30));
+  await expect(
+    page.getByRole("button", { name: "Save script edits", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("textbox", { name: "Narration · scene 1", exact: true })
+    .fill("An edited opening for this topic.");
+  await expect(
+    page.getByRole("button", { name: "Approve & generate video", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Save script edits", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Approve & generate video", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Approve & generate video", exact: true })
+    .click();
+  await expect(
+    page.getByText("Approved storyboard ready for media", { exact: true }),
+  ).toBeVisible();
+  expect(saves).toBe(1);
+  expect(approvals).toBe(1);
+  expect(advances).toBe(0);
+});
+
 test("niche library saves art style and analyzed references, then only a topic produces the final video", async ({
   page,
 }) => {

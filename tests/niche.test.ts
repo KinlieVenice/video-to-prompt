@@ -20,6 +20,7 @@ import {
 import {
   assetPath,
   getRecord,
+  listRecords,
   newAsset,
   saveRecord,
   writeAsset,
@@ -35,6 +36,11 @@ import {
 } from "../app/lib/studio/services/FlowJobService";
 import { VideoAnalysisService } from "../app/lib/studio/services/VideoAnalysisService";
 import { GET, POST } from "../app/api/studio/niches/route";
+import {
+  hookPresets,
+  nicheStorySchema,
+  storyPrompt,
+} from "../app/lib/studio/niche-story";
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const directory = path.resolve(".tmp", `niche-test-${randomUUID()}`);
@@ -165,6 +171,8 @@ test("one topic reuses reference analyses and cached planning, freezes art style
     assert.match(text, /Watercolor storybook/);
     assert.match(text, /Tracking close-up/);
     assert.match(text, /A new topic/);
+    assert.match(text, /Uploaded video is the MAIN format reference/);
+    assert.match(text, /Sample scripts are SECONDARY/);
     return f.plan;
   });
   const request = randomUUID();
@@ -338,6 +346,165 @@ test("topic storyboard runs through reference images, fake Flow clips and real F
   assert.equal(media.hasAudio, false);
   assert.equal(media.width, 720);
   assert.equal(media.height, 1280);
+});
+
+test("optional storytelling works across niches without video references and changes planning cache", async (t) => {
+  const f = await fixture(t);
+  const story = nicheStorySchema.parse({
+    sampleScripts:
+      "Example: introduce a small mystery and close with one useful tip.",
+    referenceGuidance: "Short sentences and practical endings",
+    structure: "Question, explanation, takeaway",
+    endingGuidance: "One action to try",
+    sourceReference: "Product notes, edition 2",
+    sourceMaterial: "The sample object is blue.",
+    hookStyle: "QUESTION",
+  });
+  const niche = await NicheService.save({
+    ...f.niche,
+    referenceIds: [],
+    storytelling: story,
+  });
+  let calls = 0;
+  const service = new NicheService(async (_connection, content) => {
+    calls++;
+    const prompt = JSON.stringify(content);
+    assert.match(prompt, /Product notes, edition 2/);
+    assert.match(prompt, /sample object is blue/);
+    assert.match(prompt, /Short sentences and practical endings/);
+    assert.match(prompt, /Question, explanation, takeaway/);
+    assert.match(prompt, /One action to try/);
+    assert.match(prompt, /not fetched or verified evidence/);
+    assert.match(prompt, /not words or facts to copy/);
+    return f.plan;
+  });
+  await service.plan(niche, "A product story", [], f.connection);
+  await service.plan(niche, "A product story", [], f.connection);
+  assert.equal(calls, 1);
+  await service.plan(
+    {
+      ...niche,
+      storytelling: {
+        ...story,
+        hookStyle: "CUSTOM",
+        customHook: "Start with a tiny mystery.",
+      },
+    },
+    "A product story",
+    [],
+    f.connection,
+  );
+  assert.equal(calls, 2);
+  assert.match(
+    storyPrompt({ ...story, hookStyle: "CUSTOM", customHook: "My opening" }),
+    /My opening/,
+  );
+  assert.doesNotMatch(
+    storyPrompt({ ...story, customHook: "Ignored stale custom hook" }),
+    /Ignored stale custom hook/,
+  );
+  assert.equal(nicheStorySchema.parse({}).hookStyle, "AUTO");
+  assert.match(storyPrompt(story), /No reference video is supplied/);
+  assert.match(storyPrompt(story, true), /Sample scripts are SECONDARY/);
+  assert.equal(nicheStorySchema.parse({}).reviewBeforeGeneration, false);
+  assert.equal(nicheSchema.parse(f.niche).storytelling, undefined);
+  assert.equal(new Set(hookPresets.map((p) => p.id)).size, hookPresets.length);
+  assert.throws(() => nicheStorySchema.parse({ hookStyle: "unknown" }));
+  assert.throws(() =>
+    nicheStorySchema.parse({ sampleScripts: "x".repeat(24001) }),
+  );
+});
+
+test("script review persists edits into narration and frames without starting media, and rejects edits after a run", async (t) => {
+  const f = await fixture(t);
+  const niche = await NicheService.save({
+    ...f.niche,
+    referenceIds: [],
+    audioMode: "FLOW_CLIPS",
+    storytelling: nicheStorySchema.parse({ reviewBeforeGeneration: true }),
+  });
+  const plan = {
+    ...f.plan,
+    scenes: f.plan.scenes.map((scene) => ({
+      ...scene,
+      narration: "A short spoken line.",
+    })),
+  };
+  const service = new NicheService(async () => plan);
+  const requestId = randomUUID();
+  const video = await service.create(
+    niche.id,
+    "Original story",
+    requestId,
+    f.connection,
+  );
+  const post = (payload: unknown) => {
+    const form = new FormData();
+    form.set("payload", JSON.stringify(payload));
+    return POST(
+      new Request("http://localhost:3000/api/studio/niches", {
+        method: "POST",
+        body: form,
+      }),
+    );
+  };
+  const response = await post({
+    action: "create_video",
+    nicheId: niche.id,
+    topic: video.topic,
+    requestId,
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.video.id, video.id);
+  assert.equal(result.run, undefined);
+  assert.equal((await listRecords("runs")).length, 0);
+  assert.equal((await listRecords("flow-jobs")).length, 0);
+  const edited = structuredClone(video.plan!);
+  edited.title = "Reviewed title";
+  edited.hook = "An honest opening.";
+  edited.scenes[0].narration = "An honest opening. A useful tip.";
+  edited.scenes[0].firstFrame = "The blue object in close-up";
+  const saved = await post({
+    action: "save_plan",
+    videoId: video.id,
+    value: edited,
+  });
+  assert.equal(saved.status, 200);
+  const project = await getRecord<Project>("projects", video.projectId!);
+  const analysis = await getRecord<Analysis>("analyses", project.analysisId);
+  assert.equal(project.name, "Reviewed title");
+  assert.equal(
+    analysis.contentPlan?.scenes[0].firstFrame,
+    edited.scenes[0].firstFrame,
+  );
+  assert.equal(analysis.turns[0].text, edited.scenes[0].narration);
+  assert.equal(analysis.turns[0].reviewed, true);
+  assert.equal(analysis.revision, 2);
+  assert.equal(project.versions[0].planRevision, 2);
+  assert.equal((await listRecords("runs")).length, 0);
+  const invalid = structuredClone(edited);
+  invalid.scenes[1].narration = "word ".repeat(30);
+  assert.equal(
+    (await post({ action: "save_plan", videoId: video.id, value: invalid }))
+      .status,
+    400,
+  );
+  assert.equal(
+    (await getRecord<Analysis>("analyses", project.analysisId)).revision,
+    2,
+  );
+  invalid.scenes.pop();
+  await assert.rejects(
+    () => service.savePlan(video.id, invalid),
+    /exactly 2 scenes/,
+  );
+  await saveRecord("runs", { id: randomUUID(), projectId: project.id });
+  assert.equal(
+    (await post({ action: "save_plan", videoId: video.id, value: edited }))
+      .status,
+    400,
+  );
 });
 
 test("niche endpoints reject foreign origins and invalid templates before requesting providers", async (t) => {

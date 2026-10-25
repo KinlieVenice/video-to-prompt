@@ -33,6 +33,7 @@ const schema = z.object({
     "upload_audio",
     "create_video",
     "start_video",
+    "save_plan",
   ]),
   value: z.unknown().optional(),
   nicheId: id.optional(),
@@ -99,6 +100,12 @@ export async function POST(request: Request) {
       };
       if (p.action === "save")
         return Response.json({ niche: await NicheService.save(p.value) });
+      if (p.action === "save_plan") {
+        if (!p.videoId) throw new Error("Choose a planned topic video.");
+        return Response.json({
+          video: await service.savePlan(p.videoId, p.value),
+        });
+      }
       if (p.action === "create_video" || p.action === "start_video") {
         let video: NicheVideo;
         if (p.action === "create_video") {
@@ -116,6 +123,12 @@ export async function POST(request: Request) {
         }
         if (!video.projectId || !video.versionId)
           throw new Error("Finish planning this topic first.");
+        if (
+          p.action === "create_video" &&
+          video.nicheSnapshot.storytelling?.reviewBeforeGeneration &&
+          !video.runId
+        )
+          return Response.json({ video });
         const run = video.runId
           ? await StudioRunService.get(video.runId)
           : await runner.start(

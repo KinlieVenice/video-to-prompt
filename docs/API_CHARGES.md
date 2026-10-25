@@ -1,5 +1,7 @@
 # API charges and Flow credits
 
+Optional niche script imports, hook selection and saving storytelling fields are local operations. Examples and source material increase the input tokens of the existing text-planning request; they add no separate analysis call. Optional script review stops before speech, images or Flow generation, but the initial planning request still uses the configured text provider. Saving manual script edits makes no model request. Approving the storyboard starts the existing audio/image/Flow pipeline under its usual quotas and credit limit. Hook research is stored as documented presets; generation does not run a paid trend search or fetch source URLs.
+
 Official documentation checked **23 October 2026**; the experimental browser test below ran **24 October 2026**. API billing and Flow subscription credits are separate. This branch includes a manual workspace and an optional [local browser-backed Flow API](FLOW_BRIDGE_API.md). The bridge uses the signed-in Flow subscription and requires its dedicated Chrome process to remain running.
 
 ## OpenAI through 9router

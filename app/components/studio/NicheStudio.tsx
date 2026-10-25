@@ -10,6 +10,9 @@ import {
 } from "../../lib/studio/guided";
 import type { RouterConnection } from "../../lib/studio/connection";
 import { estimateNicheCredits } from "../../lib/studio/niche";
+import { NicheStoryFields } from "./NicheStoryFields";
+import { NichePlanReview } from "./NichePlanReview";
+import { hookPresets } from "../../lib/studio/niche-story";
 
 type Library = {
   niches: Niche[];
@@ -194,6 +197,7 @@ export function NicheStudio({
         setSelected(data.niche.id);
         setDraft(data.niche);
       }
+      if (data.video) setVideo(data.video);
       if (data.run) {
         setAutomatic(data.run);
         setVideo(data.video);
@@ -379,6 +383,10 @@ export function NicheStudio({
               placeholder="Example: watercolor storybook, cinematic 3D, anime, or flat 2D. Leave blank to use the character's saved visual style."
             />
           </label>
+          <NicheStoryFields
+            value={draft.storytelling}
+            onChange={(storytelling) => patch({ storytelling })}
+          />
           <div className="two-cols">
             <label>
               Whole video length (seconds)
@@ -635,6 +643,21 @@ export function NicheStudio({
                 Art style: {niche.artStyle || "Saved character visual style"}
               </p>
               <p className="hint">
+                Hook:{" "}
+                {
+                  hookPresets.find(
+                    (p) => p.id === (niche.storytelling?.hookStyle || "AUTO"),
+                  )?.label
+                }
+                .{" "}
+                {niche.storytelling?.sampleScripts
+                  ? "Sample scripts saved. "
+                  : ""}
+                {niche.storytelling?.reviewBeforeGeneration
+                  ? "Script review enabled."
+                  : "Automatic media generation."}
+              </p>
+              <p className="hint">
                 {niche.duration}s ·{" "}
                 {niche.defaults.target === "OMNI_FLASH"
                   ? "Omni 1.1 Flash"
@@ -643,11 +666,14 @@ export function NicheStudio({
                 {characters.find((c) => c.id === niche.characterId)?.name} ·{" "}
                 {niche.audioMode}
               </p>
-              <h4>Reference videos</h4>
+              <h4>Reference videos (optional)</h4>
               <p className="hint">
                 Upload and analyze once. Future topics reuse these saved
-                observations for pacing and style. They do not copy the
-                reference dialogue or soundtrack.
+                observations for pacing and style. The main video guides the
+                format; sample scripts support tone and wording. They do not
+                copy the reference dialogue or soundtrack. No reference videos
+                are required; your description and optional scripts can guide
+                the format.
               </p>
               <label className="button upload-button">
                 Upload & analyze reference
@@ -668,11 +694,36 @@ export function NicheStudio({
                   }}
                 />
               </label>
-              {niche.referenceIds.map((id) => {
+              {niche.referenceIds.map((id, index) => {
                 const reference = library.references.find((a) => a.id === id);
                 return (
                   <div className="edit-card stack" key={id}>
                     <strong>{reference?.sourceName || id}</strong>
+                    <span className="badge">
+                      {index === 0 ? "Main reference" : "Supporting reference"}
+                    </span>
+                    {index > 0 && (
+                      <button
+                        className="button"
+                        disabled={locked}
+                        onClick={() =>
+                          action("Changing main reference…", {
+                            action: "save",
+                            value: {
+                              ...niche,
+                              referenceIds: [
+                                id,
+                                ...niche.referenceIds.filter(
+                                  (other) => other !== id,
+                                ),
+                              ],
+                            },
+                          })
+                        }
+                      >
+                        Use as main reference
+                      </button>
+                    )}
                     <span className="badge">
                       {reference?.status === "ANALYZED"
                         ? "Analysis saved for reuse"
@@ -777,8 +828,17 @@ export function NicheStudio({
                 }
                 onClick={() => generate()}
               >
-                Create video · up to {niche.maxCredits} Flow credits
+                {niche.storytelling?.reviewBeforeGeneration
+                  ? "Create script for review"
+                  : `Create video · up to ${niche.maxCredits} Flow credits`}
               </button>
+              {niche.storytelling?.reviewBeforeGeneration && (
+                <p className="hint">
+                  Only script planning runs first. After approval, media
+                  generation can use up to {niche.maxCredits} Flow credits, plus
+                  your image and audio provider usage.
+                </p>
+              )}
             </div>
             {automatic && (
               <div className="panel stack" aria-live="polite">
@@ -859,7 +919,17 @@ export function NicheStudio({
             {library.videos
               .filter((v) => v.nicheId === niche.id)
               .map((v) => (
-                <details className="panel" key={v.id}>
+                <details
+                  className="panel"
+                  key={v.id}
+                  open={
+                    v.state === "READY" &&
+                    !v.runId &&
+                    Boolean(
+                      v.nicheSnapshot.storytelling?.reviewBeforeGeneration,
+                    )
+                  }
+                >
                   <summary>
                     {v.plan?.title || v.topic} ·{" "}
                     {savedRuns[v.runId || ""]?.state || v.state}
@@ -892,14 +962,36 @@ export function NicheStudio({
                       ))}
                     </>
                   )}
-                  {v.state === "READY" && !v.runId && (
-                    <button
-                      className="button"
-                      disabled={locked}
-                      onClick={() => generate(v)}
-                    >
-                      Generate saved storyboard
-                    </button>
+                  {v.state === "READY" &&
+                  !v.runId &&
+                  v.plan &&
+                  v.nicheSnapshot.storytelling?.reviewBeforeGeneration ? (
+                    <NichePlanReview
+                      key={v.id}
+                      video={v}
+                      locked={locked}
+                      save={async (plan) =>
+                        Boolean(
+                          await action("Saving script edits…", {
+                            action: "save_plan",
+                            videoId: v.id,
+                            value: plan,
+                          }),
+                        )
+                      }
+                      start={() => generate(v)}
+                    />
+                  ) : (
+                    v.state === "READY" &&
+                    !v.runId && (
+                      <button
+                        className="button"
+                        disabled={locked}
+                        onClick={() => generate(v)}
+                      >
+                        Generate saved storyboard
+                      </button>
+                    )
                   )}
                 </details>
               ))}
